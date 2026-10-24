@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AlphaQuant | A股全栈量化策略研究与回测系统</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- ECharts 5 -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- 顶部状态栏 -->
+    <header class="top-header">
+      <div class="logo-group">
+        <div class="logo-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <path d="M3 13.2L7 9.2L11 13.2L17 7.2L21 11.2" stroke="url(#header-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M17 7.2H21V11.2" stroke="url(#header-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs>
+              <linearGradient id="header-grad" x1="3" y1="7.2" x2="21" y2="13.2" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#38BDF8"/>
+                <stop offset="1" stop-color="#818CF8"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <span class="brand-title">AlphaQuant</span>
+          <span class="brand-sub">A股全栈量化投研平台</span>
+        </div>
+      </div>
+
+      <div class="quick-presets">
+        <span class="preset-label">标的速选:</span>
+        <button class="preset-btn active" data-symbol="510300" data-name="300ETF">510300 沪深300ETF</button>
+        <button class="preset-btn" data-symbol="600519" data-name="贵州茅台">600519 贵州茅台</button>
+        <button class="preset-btn" data-symbol="000001" data-name="平安银行">000001 平安银行</button>
+        <button class="preset-btn" data-symbol="300750" data-name="宁德时代">300750 宁德时代</button>
+        <button class="preset-btn" data-symbol="512010" data-name="医药ETF">512010 医药ETF</button>
+      </div>
+
+      <div class="header-badges">
+        <div class="badge status-live">
+          <span class="badge-dot"></span>
+          <span>A股 T+1 严格撮合</span>
+        </div>
+        <div class="badge status-cache">
+          <span class="badge-dot blue"></span>
+          <span>Parquet 秒级缓存</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="main-body">
+      <!-- 左侧策略与回测参数配置侧边栏 -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h3>策略与参数配置</h3>
+          <span class="badge-tag">配置面板</span>
+        </div>
+
+        <form id="backtest-form" class="config-form">
+          <!-- 1. 策略选择 -->
+          <div class="form-section">
+            <label class="section-title">选择量化策略</label>
+            <div class="select-wrapper">
+              <select id="strategy-select" class="form-control">
+                <!-- 动态填充 -->
+              </select>
+            </div>
+            <p id="strategy-desc" class="field-hint"></p>
+          </div>
+
+          <!-- 2. 策略动态参数 -->
+          <div class="form-section">
+            <label class="section-title">策略核心参数</label>
+            <div id="dynamic-params-container" class="dynamic-params-grid">
+              <!-- 动态参数表单 -->
+            </div>
+          </div>
+
+          <!-- 3. 回测标的与时间范围 -->
+          <div class="form-section">
+            <label class="section-title">标的与区间</label>
+            <div class="input-group">
+              <label for="input-symbol">股票/ETF 代码</label>
+              <input type="text" id="input-symbol" class="form-control" value="510300" placeholder="例如 510300 或 600519">
+            </div>
+
+            <div class="grid-2col">
+              <div class="input-group">
+                <label for="input-start-date">开始日期</label>
+                <input type="date" id="input-start-date" class="form-control" value="2023-01-01">
+              </div>
+              <div class="input-group">
+                <label for="input-end-date">结束日期</label>
+                <input type="date" id="input-end-date" class="form-control" value="2024-01-01">
+              </div>
+            </div>
+
+            <div class="date-shortcuts">
+              <button type="button" class="chip-btn" data-days="365">近1年</button>
+              <button type="button" class="chip-btn" data-days="730">近2年</button>
+              <button type="button" class="chip-btn" data-days="1095">近3年</button>
+            </div>
+          </div>
+
+          <!-- 4. 账户本金与A股规则 -->
+          <div class="form-section">
+            <label class="section-title">资金与A股规则</label>
+            <div class="input-group">
+              <label for="input-cash">初始本金 (元)</label>
+              <input type="number" id="input-cash" class="form-control" value="100000" step="10000">
+            </div>
+
+            <div class="advanced-toggle" id="toggle-cost-btn">
+              <span>A股交易费率设置</span>
+              <span class="toggle-icon">▼</span>
+            </div>
+
+            <div class="advanced-cost-panel" id="cost-panel">
+              <div class="cost-item">
+                <span>买卖佣金率</span>
+                <input type="number" id="input-commission" class="cost-input" value="0.00025" step="0.00005">
+                <span class="unit">万2.5</span>
+              </div>
+              <div class="cost-item">
+                <span>卖出印花税</span>
+                <input type="number" id="input-stamp-tax" class="cost-input" value="0.0005" step="0.0001">
+                <span class="unit">万5</span>
+              </div>
+              <div class="cost-item">
+                <span>单笔最低佣金</span>
+                <input type="number" id="input-min-commission" class="cost-input" value="5" step="1">
+                <span class="unit">元</span>
+              </div>
+              <div class="cost-item">
+                <span>双向滑点</span>
+                <input type="number" id="input-slippage" class="cost-input" value="0.0005" step="0.0001">
+                <span class="unit">0.05%</span>
+              </div>
+            </div>
+
+            <div class="rules-switches">
+              <label class="switch-item">
+                <input type="checkbox" id="check-t1" checked>
+                <span class="switch-text">严格 T+1 可用持仓限制</span>
+              </label>
+              <label class="switch-item">
+                <input type="checkbox" id="check-limits" checked>
+                <span class="switch-text">封死涨停禁买 / 跌停禁卖</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- 提交按钮 -->
+          <button type="submit" id="run-btn" class="run-button">
+            <span class="btn-spinner"></span>
+            <span class="btn-text">运行量化回测</span>
+          </button>
+        </form>
+      </aside>
+
+      <!-- 右侧主看板 -->
+      <main class="dashboard-main">
+        <!-- 概览标头信息 -->
+        <div class="summary-banner">
+          <div class="summary-left">
+            <span class="target-title" id="display-target">510300 沪深300ETF</span>
+            <span class="target-badge" id="display-strategy">双均线交叉策略</span>
+            <span class="target-span" id="display-range">2023-01-01 至 2024-01-01</span>
+          </div>
+          <div class="summary-right">
+            <div class="stat-pill">
+              <span class="pill-label">初始资金</span>
+              <span class="pill-value" id="disp-initial-cash">¥100,000.00</span>
+            </div>
+            <div class="stat-pill">
+              <span class="pill-label">期末总资产</span>
+              <span class="pill-value highlight" id="disp-final-asset">--</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 6大核心指标卡片 -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">策略累计收益</span>
+              <span class="metric-badge" id="m-excess-badge">超额 --</span>
+            </div>
+            <div class="metric-value" id="m-total-return">--%</div>
+            <div class="metric-sub">
+              <span>对标沪深300:</span>
+              <span id="m-bmk-return">--%</span>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">年化收益率</span>
+              <span class="metric-badge neutral">250日年化</span>
+            </div>
+            <div class="metric-value" id="m-annual-return">--%</div>
+            <div class="metric-sub">
+              <span>基准年化:</span>
+              <span id="m-bmk-annual">--%</span>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">夏普比率 (Sharpe)</span>
+              <span class="metric-badge" id="m-sharpe-badge">风险收益</span>
+            </div>
+            <div class="metric-value highlight-cyan" id="m-sharpe">--</div>
+            <div class="metric-sub">
+              <span>索提诺比率:</span>
+              <span id="m-sortino">--</span>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">最大回撤 (Max DD)</span>
+              <span class="metric-badge danger">下行风险</span>
+            </div>
+            <div class="metric-value text-red" id="m-max-dd">--%</div>
+            <div class="metric-sub">
+              <span>卡玛比率 (Calmar):</span>
+              <span id="m-calmar">--</span>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">交易胜率 (Win Rate)</span>
+              <span class="metric-badge neutral">已平仓交易</span>
+            </div>
+            <div class="metric-value" id="m-win-rate">--%</div>
+            <div class="metric-sub">
+              <span>盈亏比:</span>
+              <span id="m-profit-loss">--</span>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">总交易次数</span>
+              <span class="metric-badge neutral">撮合笔数</span>
+            </div>
+            <div class="metric-value" id="m-total-trades">--</div>
+            <div class="metric-sub">
+              <span>盈利/亏损:</span>
+              <span id="m-win-loss-count">-- / --</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 交互式图表区 -->
+        <div class="chart-section card-box">
+          <div class="chart-header">
+            <div class="chart-tabs">
+              <button class="chart-tab active" data-tab="equity">净值曲线对比</button>
+              <button class="chart-tab" data-tab="kline">标的K线与买卖点</button>
+              <button class="chart-tab" data-tab="drawdown">水下动态回撤</button>
+            </div>
+            <div class="chart-tools">
+              <span class="chart-legend-item"><span class="legend-color equity-color"></span>策略净值</span>
+              <span class="chart-legend-item"><span class="legend-color bmk-color"></span>沪深300</span>
+            </div>
+          </div>
+
+          <div class="chart-wrapper">
+            <div id="main-chart" style="width: 100%; height: 380px;"></div>
+          </div>
+        </div>
+
+        <!-- 底部数据明细看板 -->
+        <div class="details-section card-box">
+          <div class="details-header">
+            <div class="details-tabs">
+              <button class="details-tab active" data-pane="trades">成交记录明细 (<span id="trades-count">0</span>)</button>
+              <button class="details-tab" data-pane="logs">回测引擎日志</button>
+            </div>
+          </div>
+
+          <!-- 成交明细表 -->
+          <div class="details-pane active" id="pane-trades">
+            <div class="table-wrapper">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>成交时间</th>
+                    <th>标的代码</th>
+                    <th>操作方向</th>
+                    <th>成交价格</th>
+                    <th>成交股数</th>
+                    <th>佣金规费</th>
+                    <th>印花税</th>
+                    <th>总成本</th>
+                    <th>已实现盈亏</th>
+                    <th>账户余额</th>
+                  </tr>
+                </thead>
+                <tbody id="trades-table-body">
+                  <tr>
+                    <td colspan="10" class="empty-cell">暂无交易记录</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 引擎日志 -->
+          <div class="details-pane" id="pane-logs">
+            <div class="logs-console" id="logs-container">
+              <div class="log-line info">等待回测启动...</div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
