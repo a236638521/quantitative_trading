@@ -1,3 +1,8 @@
+import os
+# 清空代理环境变量，防止国内金融行情数据接口与镜像源卡死
+for proxy_key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]:
+    os.environ[proxy_key] = ""
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

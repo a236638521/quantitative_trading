@@ -51,10 +51,27 @@
           <span class="badge-dot blue"></span>
           <span>Parquet 秒级缓存</span>
         </div>
-      </div>
     </header>
 
-    <div class="main-body">
+    <!-- 顶部主功能模块导航 -->
+    <nav class="top-nav-bar">
+      <button class="nav-mode-btn active" data-target="view-backtest">
+        <span class="mode-icon">📈</span>
+        <span>经典策略 & 多资产轮动</span>
+      </button>
+      <button class="nav-mode-btn" data-target="view-sandbox">
+        <span class="mode-icon">💻</span>
+        <span>策略代码在线沙箱</span>
+      </button>
+      <button class="nav-mode-btn" data-target="view-factors">
+        <span class="mode-icon">📊</span>
+        <span>可视化因子投研中心</span>
+      </button>
+    </nav>
+
+    <!-- 模块 1: 经典策略与多资产回测 -->
+    <div id="view-backtest" class="app-view active">
+      <div class="main-body">
       <!-- 左侧策略与回测参数配置侧边栏 -->
       <aside class="sidebar">
         <div class="sidebar-header">
@@ -391,7 +408,386 @@
         </div>
       </main>
     </div>
-  </div>
+  </div><!-- /view-backtest -->
+
+  <!-- 模块 2: 策略代码在线编写沙箱 -->
+  <div id="view-sandbox" class="app-view" style="display: none;">
+    <div class="sandbox-container">
+      <!-- 左侧：代码编辑与沙箱诊断区 -->
+      <div class="sandbox-editor-pane">
+        <!-- 顶部工具栏 -->
+        <div class="sandbox-toolbar">
+          <div class="toolbar-left">
+            <span class="toolbar-label">策略模板:</span>
+            <select id="sandbox-template-select" class="form-control select-template">
+              <!-- 动态载入模板 -->
+            </select>
+            <button type="button" id="sandbox-load-template-btn" class="chip-btn">📋 载入模板</button>
+          </div>
+          <div class="toolbar-right">
+            <button type="button" id="sandbox-run-btn" class="run-button">
+              <span class="btn-spinner"></span>
+              <span class="btn-text">⚡ 编译运行沙箱回测</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 标的与回测参数快捷栏 -->
+        <div class="sandbox-params-strip">
+          <div class="strip-item">
+            <label>回测标的</label>
+            <input type="text" id="sandbox-symbol" class="form-control" value="510300" placeholder="510300">
+          </div>
+          <div class="strip-item">
+            <label>开始日期</label>
+            <input type="date" id="sandbox-start-date" class="form-control" value="2023-01-01">
+          </div>
+          <div class="strip-item">
+            <label>结束日期</label>
+            <input type="date" id="sandbox-end-date" class="form-control" value="2024-01-01">
+          </div>
+          <div class="strip-item">
+            <label>初始本金 (元)</label>
+            <input type="number" id="sandbox-cash" class="form-control" value="100000" step="10000">
+          </div>
+        </div>
+
+        <!-- 代码编辑器容器 -->
+        <div class="editor-wrapper">
+          <div class="editor-header">
+            <div class="editor-tabs">
+              <span class="editor-tab active">🐍 strategy_sandbox.py</span>
+            </div>
+            <span class="editor-sub-tag">支持 BaseStrategy, on_bar, prepare_indicators, calc_momentum 等内置API</span>
+          </div>
+          <div class="editor-body">
+            <div class="code-line-numbers" id="sandbox-line-numbers">1</div>
+            <textarea id="sandbox-code" class="code-textarea" spellcheck="false" placeholder="在此编写或修改 Python 策略代码..."></textarea>
+          </div>
+        </div>
+
+        <!-- 诊断与错误控制台 -->
+        <div class="sandbox-diagnostics-box">
+          <div class="diagnostics-header">
+            <div class="diag-title">
+              <span>沙箱诊断控制台</span>
+              <span id="sandbox-status-badge" class="badge-status ready">就绪</span>
+            </div>
+            <span id="sandbox-diag-time" class="diag-time">--</span>
+          </div>
+          <div id="sandbox-diagnostics-log" class="diagnostics-content">
+            <div class="console-line info">沙箱环境就绪。支持实时语法检测、A股撮合引擎沙盒隔离执行与错误调用栈高亮。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧：沙箱回测绩效与成交看板 -->
+      <div class="sandbox-results-pane">
+        <!-- 概览标头信息 -->
+        <div class="summary-banner">
+          <div class="summary-left">
+            <span class="target-title" id="sb-disp-symbol">510300 沪深300ETF</span>
+            <span class="target-badge" id="sb-disp-name">自定义沙箱策略</span>
+            <span class="target-span" id="sb-disp-range">2023-01-01 至 2024-01-01</span>
+          </div>
+          <div class="summary-right">
+            <div class="stat-pill">
+              <span class="pill-label">期末总资产</span>
+              <span class="pill-value highlight" id="sb-disp-final-asset">--</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 6大指标卡 -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">累计收益率</span>
+              <span class="metric-badge" id="sb-excess-badge">超额 --</span>
+            </div>
+            <div class="metric-value" id="sb-m-total-return">--%</div>
+            <div class="metric-sub">
+              <span>基准收益:</span>
+              <span id="sb-m-bmk-return">--%</span>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">年化收益率</span>
+              <span class="metric-badge neutral">250日年化</span>
+            </div>
+            <div class="metric-value" id="sb-m-annual-return">--%</div>
+            <div class="metric-sub">
+              <span>基准年化:</span>
+              <span id="sb-m-bmk-annual">--%</span>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">夏普比率 (Sharpe)</span>
+              <span class="metric-badge">风险收益</span>
+            </div>
+            <div class="metric-value highlight-cyan" id="sb-m-sharpe">--</div>
+            <div class="metric-sub">
+              <span>索提诺比率:</span>
+              <span id="sb-m-sortino">--</span>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">最大回撤 (Max DD)</span>
+              <span class="metric-badge danger">下行风险</span>
+            </div>
+            <div class="metric-value text-red" id="sb-m-max-dd">--%</div>
+            <div class="metric-sub">
+              <span>卡玛比率:</span>
+              <span id="sb-m-calmar">--</span>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">交易胜率 (Win Rate)</span>
+              <span class="metric-badge neutral">已平仓</span>
+            </div>
+            <div class="metric-value" id="sb-m-win-rate">--%</div>
+            <div class="metric-sub">
+              <span>盈亏比:</span>
+              <span id="sb-m-profit-loss">--</span>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">成交次数</span>
+              <span class="metric-badge neutral">撮合笔数</span>
+            </div>
+            <div class="metric-value" id="sb-m-total-trades">--</div>
+            <div class="metric-sub">
+              <span>盈利/亏损:</span>
+              <span id="sb-m-win-loss">-- / --</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 沙箱图表区 -->
+        <div class="chart-section card-box">
+          <div class="chart-header">
+            <div class="chart-tabs">
+              <button class="chart-tab active" data-sbtab="equity">净值曲线对比</button>
+              <button class="chart-tab" data-sbtab="drawdown">水下动态回撤</button>
+            </div>
+            <div class="chart-tools">
+              <span class="chart-legend-item"><span class="legend-color equity-color"></span>沙箱净值</span>
+              <span class="chart-legend-item"><span class="legend-color bmk-color"></span>沪深300</span>
+            </div>
+          </div>
+          <div class="chart-wrapper">
+            <div id="sandbox-chart" style="width: 100%; height: 350px;"></div>
+          </div>
+        </div>
+
+        <!-- 沙箱交易明细 -->
+        <div class="details-section card-box">
+          <div class="details-header">
+            <div class="details-tabs">
+              <button class="details-tab active">沙箱成交记录 (<span id="sb-trades-count">0</span>)</button>
+            </div>
+          </div>
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>成交时间</th>
+                  <th>标的代码</th>
+                  <th>操作方向</th>
+                  <th>成交价格</th>
+                  <th>成交股数</th>
+                  <th>佣金规费</th>
+                  <th>印花税</th>
+                  <th>总成本</th>
+                  <th>已实现盈亏</th>
+                  <th>账户余额</th>
+                </tr>
+              </thead>
+              <tbody id="sb-trades-table-body">
+                <tr><td colspan="10" class="empty-cell">暂无交易记录</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div><!-- /view-sandbox -->
+
+  <!-- 模块 3: 可视化因子投研分析中心 -->
+  <div id="view-factors" class="app-view" style="display: none;">
+    <div class="factor-view-container">
+      <!-- 顶部因子投研配置栏 -->
+      <div class="factor-config-card card-box">
+        <div class="factor-config-grid">
+          <!-- 1. 因子选择与详情 -->
+          <div class="cfg-col factor-col">
+            <label class="cfg-label">选择投研因子</label>
+            <select id="factor-select" class="form-control">
+              <!-- 动态加载因子 -->
+            </select>
+            <div class="factor-meta-box">
+              <span class="meta-tag" id="factor-category-tag">动量趋势</span>
+              <code class="meta-formula" id="factor-formula-text">Close(t) / Close(t-20) - 1.0</code>
+              <p class="meta-desc" id="factor-desc-text">过去 20 个交易日的区间累计涨跌幅，反映中期顺势动量效应。</p>
+            </div>
+          </div>
+
+          <!-- 2. 标的池选择 -->
+          <div class="cfg-col pool-col">
+            <label class="cfg-label">投研标的池速选</label>
+            <div class="pool-shortcuts">
+              <button type="button" class="chip-btn active" data-fpool="etf">🌐 ETF 大类资产池</button>
+              <button type="button" class="chip-btn" data-fpool="bluechip">💎 核心蓝筹池 (10只)</button>
+              <button type="button" class="chip-btn" data-fpool="growth">🚀 科技成长池 (6只)</button>
+            </div>
+            <label class="cfg-sub-label">标的代码池 (逗号分隔):</label>
+            <input type="text" id="factor-symbols-input" class="form-control" value="510300,510500,513100,518880,511010" placeholder="510300,510500,518880">
+          </div>
+
+          <!-- 3. 周期与操作 -->
+          <div class="cfg-col run-col">
+            <label class="cfg-label">未来收益预测周期 (Forward Horizon)</label>
+            <div class="horizon-radios">
+              <label class="radio-label"><input type="radio" name="forward-horizon" value="1"> 1日 (1D)</label>
+              <label class="radio-label"><input type="radio" name="forward-horizon" value="5" checked> 5日 (5D 推荐)</label>
+              <label class="radio-label"><input type="radio" name="forward-horizon" value="20"> 20日 (20D 月度)</label>
+            </div>
+
+            <div class="factor-action-row">
+              <button type="button" id="factor-analyze-btn" class="run-button">
+                <span class="btn-spinner"></span>
+                <span class="btn-text">🚀 启动因子投研深度评价</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6项因子核心指标卡片 -->
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">Rank-IC 均值 (Mean IC)</span>
+            <span class="metric-badge" id="factor-ic-badge">--</span>
+          </div>
+          <div class="metric-value highlight-cyan" id="factor-m-ic-mean">--</div>
+          <div class="metric-sub">
+            <span>IC 标准差:</span>
+            <span id="factor-m-ic-std">--</span>
+          </div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">IC 信息比率 (IC-IR)</span>
+            <span class="metric-badge neutral">稳定性指标</span>
+          </div>
+          <div class="metric-value" id="factor-m-ic-ir">--</div>
+          <div class="metric-sub">
+            <span>年化 IR:</span>
+            <span id="factor-m-ann-ir">--</span>
+          </div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">IC 正值胜率</span>
+            <span class="metric-badge" id="factor-pos-badge">方向一致性</span>
+          </div>
+          <div class="metric-value text-green" id="factor-m-pos-ratio">--%</div>
+          <div class="metric-sub">
+            <span>t 统计量:</span>
+            <span id="factor-m-tstat">--</span>
+          </div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">多空累计收益 (Q1 - Q5)</span>
+            <span class="metric-badge highlight">Alpha对冲</span>
+          </div>
+          <div class="metric-value" id="factor-m-ls-return">--%</div>
+          <div class="metric-sub">
+            <span>多空年化:</span>
+            <span id="factor-m-ls-annual">--%</span>
+          </div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">多空最大回撤</span>
+            <span class="metric-badge danger">对冲风险</span>
+          </div>
+          <div class="metric-value text-red" id="factor-m-ls-maxdd">--%</div>
+          <div class="metric-sub">
+            <span>下行控制</span>
+          </div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">单调性得分 (Monotonicity)</span>
+            <span class="metric-badge neutral">阶梯单调</span>
+          </div>
+          <div class="metric-value highlight-cyan" id="factor-m-mono-score">--</div>
+          <div class="metric-sub">
+            <span>秩相关系数 (-1 ~ +1)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 因子可视化图表区 -->
+      <div class="chart-section card-box">
+        <div class="chart-header">
+          <div class="chart-tabs">
+            <button class="chart-tab active" data-factab="nav">5组分层回测累计净值 (Q1~Q5 & 多空对冲)</button>
+            <button class="chart-tab" data-factab="ic">Rank-IC 逐日时序柱状图与累计 IC 趋势</button>
+            <button class="chart-tab" data-factab="group_bar">各分组年化收益与夏普比率梯队对比</button>
+          </div>
+        </div>
+        <div class="chart-wrapper">
+          <div id="factor-main-chart" style="width: 100%; height: 420px;"></div>
+        </div>
+      </div>
+
+      <!-- 分层绩效统计表 -->
+      <div class="details-section card-box">
+        <div class="details-header">
+          <div class="details-tabs">
+            <button class="details-tab active">分层梯队回测绩效统计明细表</button>
+          </div>
+        </div>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>分组</th>
+                <th>分层说明</th>
+                <th>累计收益率</th>
+                <th>年化收益率</th>
+                <th>最大回撤</th>
+                <th>夏普比率 (Sharpe)</th>
+                <th>梯队单调性评定</th>
+              </tr>
+            </thead>
+            <tbody id="factor-group-table-body">
+              <tr><td colspan="7" class="empty-cell">请点击上方【🚀 启动因子投研深度评价】生成分层绩效</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div><!-- /view-factors -->
 
   <script src="app.js"></script>
 </body>

@@ -7,6 +7,8 @@ from ..config import BacktestConfig, TradingCostConfig
 from ..core.engine import BacktestEngine
 from ..core.portfolio_engine import PortfolioBacktestEngine
 from ..core.optimizer import GridSearchOptimizer
+from ..core.sandbox import StrategySandbox, SAMPLE_TEMPLATES
+from ..factors.analysis import FactorAnalyzer, AVAILABLE_FACTORS
 from ..data.provider import MarketDataProvider, normalize_symbol
 from ..strategies.dual_ma import DualMAStrategy
 from ..strategies.turtle import TurtleStrategy
@@ -161,6 +163,31 @@ class OptimizationRequest(BaseModel):
     enable_t_plus_one: bool = Field(default=True, description="是否启用 T+1")
     enforce_price_limits: bool = Field(default=True, description="是否涨跌停无法买卖")
     benchmark_symbol: str = Field(default="000300", description="基准代码")
+
+
+class SandboxRunRequest(BaseModel):
+    code: str = Field(..., description="Python 策略代码字符串")
+    symbol: str = Field(default="510300", description="标的代码")
+    start_date: str = Field(default="2023-01-01", description="开始日期")
+    end_date: str = Field(default="2024-01-01", description="结束日期")
+    initial_cash: float = Field(default=100000.0, description="初始本金")
+    commission_rate: float = Field(default=0.00025, description="佣金费率")
+    min_commission: float = Field(default=5.0, description="最低佣金")
+    stamp_tax_rate: float = Field(default=0.0005, description="印花税率")
+    transfer_fee_rate: float = Field(default=0.00001, description="过户费率")
+    slippage_rate: float = Field(default=0.0005, description="滑点")
+    enable_t_plus_one: bool = Field(default=True, description="严格 T+1")
+    enforce_price_limits: bool = Field(default=True, description="涨跌停限制")
+    benchmark_symbol: str = Field(default="000300", description="基准代码")
+
+
+class FactorAnalyzeRequest(BaseModel):
+    factor_name: str = Field(default="momentum_20", description="因子名称")
+    symbols: List[str] = Field(default_factory=lambda: ["510300", "510500", "513100", "518880", "511010"], description="股票/ETF标的池")
+    start_date: str = Field(default="2023-01-01", description="开始日期")
+    end_date: str = Field(default="2024-01-01", description="结束日期")
+    forward_period: int = Field(default=5, description="未来收益预测周期 (日)")
+    quantiles: int = Field(default=5, description="分层组数")
 
 
 @router.get("/health")
@@ -353,3 +380,119 @@ def get_kline(symbol: str = "510300", start_date: str = "2023-01-01", end_date: 
 
     records = df[["date", "open", "close", "low", "high", "volume", "amount"]].to_dict(orient="records")
     return {"symbol": symbol, "count": len(records), "data": records}
+
+
+@router.get("/sandbox/templates")
+def get_sandbox_templates():
+    """获取沙箱预置策略模板代码与说明"""
+    return {"templates": SAMPLE_TEMPLATES}
+
+
+@router.post("/sandbox/run")
+def run_sandbox_code(req: SandboxRunRequest):
+    """在线编译执行自定义策略并运行回测"""
+    if not req.code or not req.code.strip():
+        raise HTTPException(status_code=400, detail="策略代码不能为空")
+
+    # 1. 加载标的数据与基准数据
+    df = data_provider.fetch_daily_bars(
+        symbol=req.symbol,
+        start_date=req.start_date,
+        end_date=req.end_date,
+        adjust="qfq"
+    )
+    if df.empty:
+        raise HTTPException(status_code=400, detail=f"标的 {req.symbol} 行情数据获取失败")
+
+    bmk_df = data_provider.fetch_benchmark_bars(
+        benchmark_symbol=req.benchmark_symbol,
+        start_date=req.start_date,
+        end_date=req.end_date
+    )
+
+    # 2. 构造回测配置
+    cost_cfg = TradingCostConfig(
+        commission_rate=req.commission_rate,
+        min_commission=req.min_commission,
+        stamp_tax_rate=req.stamp_tax_rate,
+        transfer_fee_rate=req.transfer_fee_rate,
+        slippage_rate=req.slippage_rate
+    )
+    backtest_cfg = BacktestConfig(
+        initial_cash=req.initial_cash,
+        cost_config=cost_cfg,
+        benchmark_symbol=req.benchmark_symbol,
+        enable_t_plus_one=req.enable_t_plus_one,
+        enforce_price_limits=req.enforce_price_limits
+    )
+
+    # 3. 在沙箱中编译执行
+    exec_res = StrategySandbox.execute_custom_strategy(
+        code_str=req.code,
+        data_df=df,
+        benchmark_df=bmk_df,
+        symbol=req.symbol,
+        config=backtest_cfg
+    )
+
+    if not exec_res.get("success", False):
+        return {
+            "code": 400,
+            "success": False,
+            "error_type": exec_res.get("error_type", "ExecutionError"),
+            "message": exec_res.get("message", "回测执行失败"),
+            "detail": exec_res.get("detail", "")
+        }
+
+    return {
+        "code": 200,
+        "success": True,
+        "message": f"自定义策略 {exec_res['strategy_name']} 沙箱回测完成",
+        "data": exec_res["metrics"]
+    }
+
+
+@router.get("/factors/available")
+def get_available_factors():
+    """获取系统支持的投研因子列表"""
+    return {"factors": AVAILABLE_FACTORS}
+
+
+@router.post("/factors/analyze")
+def run_factor_analysis(req: FactorAnalyzeRequest):
+    """运行因子有效性分析 (Rank-IC、分层回测与多空对冲)"""
+    if not req.symbols or len(req.symbols) < 2:
+        raise HTTPException(status_code=400, detail="因子分析至少需要提供 2 只标的")
+
+    # 1. 批量获取标的行情
+    data_dict = data_provider.fetch_multi_daily_bars(
+        symbols=req.symbols,
+        start_date=req.start_date,
+        end_date=req.end_date,
+        adjust="qfq"
+    )
+    if not data_dict or len(data_dict) < 2:
+        raise HTTPException(status_code=400, detail="标的池数据不足以开展因子分析")
+
+    # 2. 对齐交易日历
+    bmk_df = data_provider.fetch_benchmark_bars(
+        benchmark_symbol="000300",
+        start_date=req.start_date,
+        end_date=req.end_date
+    )
+    trading_dates, aligned_dict = data_provider.align_multi_bars(data_dict, bmk_df)
+
+    # 3. 调用 FactorAnalyzer 执行分析
+    try:
+        analysis_result = FactorAnalyzer.analyze(
+            factor_name=req.factor_name,
+            data_dict=aligned_dict,
+            trading_dates=trading_dates,
+            forward_period=req.forward_period,
+            quantiles=req.quantiles
+        )
+        return {"code": 200, "message": "因子投研分析完成", "data": analysis_result}
+    except Exception as e:
+        logger.exception("因子投研分析异常")
+        raise HTTPException(status_code=500, detail=f"因子投研分析异常: {str(e)}")
+

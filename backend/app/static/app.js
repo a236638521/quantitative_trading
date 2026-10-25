@@ -74,6 +74,9 @@ const els = {
 document.addEventListener('DOMContentLoaded', async () => {
   initChart();
   bindEvents();
+  initViewSwitcher();
+  initSandbox();
+  initFactorResearch();
   await loadStrategies();
   // 首次进入自动跑一次默认回测展示给用户
   triggerBacktest();
@@ -1084,3 +1087,810 @@ function renderLogs(logs) {
 
   els.logsContainer.scrollTop = els.logsContainer.scrollHeight;
 }
+
+/* ==========================================================================
+   Phase 2: 顶部多模块主功能视图切换 (View Switcher)
+   ========================================================================== */
+function initViewSwitcher() {
+  const modeBtns = document.querySelectorAll('.nav-mode-btn');
+  modeBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      modeBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      const targetId = btn.dataset.target;
+      document.querySelectorAll('.app-view').forEach(view => {
+        view.style.display = 'none';
+        view.classList.remove('active');
+      });
+
+      const targetView = document.getElementById(targetId);
+      if (targetView) {
+        targetView.style.display = 'block';
+        targetView.classList.add('active');
+      }
+
+      // 调整图表大小以防初次隐藏导致宽高为0
+      setTimeout(() => {
+        if (targetId === 'view-backtest' && state.chartInstance) {
+          state.chartInstance.resize();
+        } else if (targetId === 'view-sandbox' && sandboxState.chart) {
+          sandboxState.chart.resize();
+        } else if (targetId === 'view-factors' && factorState.chart) {
+          factorState.chart.resize();
+        }
+      }, 50);
+    });
+  });
+}
+
+/* ==========================================================================
+   Phase 2: 策略代码在线沙箱模块 (Strategy Online Sandbox)
+   ========================================================================== */
+const sandboxState = {
+  templates: {},
+  currentResult: null,
+  activeTab: 'equity',
+  chart: null
+};
+
+function initSandbox() {
+  const templateSelect = document.getElementById('sandbox-template-select');
+  const loadTemplateBtn = document.getElementById('sandbox-load-template-btn');
+  const runBtn = document.getElementById('sandbox-run-btn');
+  const codeEditor = document.getElementById('sandbox-code');
+  const lineNumbers = document.getElementById('sandbox-line-numbers');
+  const chartEl = document.getElementById('sandbox-chart');
+
+  if (chartEl) {
+    sandboxState.chart = echarts.init(chartEl);
+    window.addEventListener('resize', () => {
+      sandboxState.chart && sandboxState.chart.resize();
+    });
+  }
+
+  // 1. 行号与滚动同步
+  function updateLineNumbers() {
+    if (!codeEditor || !lineNumbers) return;
+    const lines = codeEditor.value.split('\n').length;
+    lineNumbers.innerHTML = Array.from({ length: lines }, (_, i) => i + 1).join('\n');
+    lineNumbers.scrollTop = codeEditor.scrollTop;
+  }
+
+  if (codeEditor) {
+    codeEditor.addEventListener('input', updateLineNumbers);
+    codeEditor.addEventListener('scroll', () => {
+      if (lineNumbers) lineNumbers.scrollTop = codeEditor.scrollTop;
+    });
+
+    // 支持 TAB 键缩进 4 空格
+    codeEditor.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const start = codeEditor.selectionStart;
+        const end = codeEditor.selectionEnd;
+        codeEditor.value = codeEditor.value.substring(0, start) + '    ' + codeEditor.value.substring(end);
+        codeEditor.selectionStart = codeEditor.selectionEnd = start + 4;
+        updateLineNumbers();
+      }
+    });
+  }
+
+  // 2. 加载模板列表
+  fetch('/api/sandbox/templates')
+    .then(res => res.json())
+    .then(data => {
+      if (data && data.templates) {
+        sandboxState.templates = data.templates;
+        templateSelect.innerHTML = '';
+        Object.keys(data.templates).forEach(key => {
+          const t = data.templates[key];
+          const opt = document.createElement('option');
+          opt.value = key;
+          opt.textContent = `${t.name} (${key})`;
+          templateSelect.appendChild(opt);
+        });
+
+        // 默认载入第一个模板
+        const firstKey = Object.keys(data.templates)[0];
+        if (firstKey) {
+          codeEditor.value = data.templates[firstKey].code;
+          updateLineNumbers();
+        }
+      }
+    })
+    .catch(err => console.error('加载沙箱模板失败:', err));
+
+  // 载入模板按钮
+  loadTemplateBtn && loadTemplateBtn.addEventListener('click', () => {
+    const key = templateSelect.value;
+    if (sandboxState.templates[key]) {
+      codeEditor.value = sandboxState.templates[key].code;
+      updateLineNumbers();
+      logSandboxConsole(`已载入模板: ${sandboxState.templates[key].name}`, 'info');
+    }
+  });
+
+  // 3. 沙箱回测图表 Tab 切换
+  document.querySelectorAll('[data-sbtab]').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('[data-sbtab]').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      sandboxState.activeTab = tab.dataset.sbtab;
+      renderSandboxChart();
+    });
+  });
+
+  // 4. 运行沙箱回测
+  runBtn && runBtn.addEventListener('click', async () => {
+    const code = codeEditor.value;
+    const symbol = document.getElementById('sandbox-symbol').value.trim() || '510300';
+    const startDate = document.getElementById('sandbox-start-date').value || '2023-01-01';
+    const endDate = document.getElementById('sandbox-end-date').value || '2024-01-01';
+    const cash = parseFloat(document.getElementById('sandbox-cash').value) || 100000;
+
+    runBtn.classList.add('loading');
+    updateSandboxStatus('ready', '正在编译撮合...');
+    logSandboxConsole(`[${new Date().toLocaleTimeString()}] 开始编译用户代码并启动 A 股沙箱撮合 (${symbol}, ${startDate} 至 ${endDate})...`, 'info');
+
+    try {
+      const resp = await fetch('/api/sandbox/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: code,
+          symbol: symbol,
+          start_date: startDate,
+          end_date: endDate,
+          initial_cash: cash
+        })
+      });
+
+      const res = await resp.json();
+      runBtn.classList.remove('loading');
+
+      if (!res.success) {
+        updateSandboxStatus('error', res.error_type || '执行异常');
+        logSandboxConsole(`❌ 沙箱报错: ${res.message}\n${res.detail || ''}`, 'error');
+        return;
+      }
+
+      // 运行成功
+      updateSandboxStatus('success', '回测成功');
+      const metricsData = res.data;
+      sandboxState.currentResult = metricsData;
+
+      logSandboxConsole(`✅ 策略编译通过并完成回测！期末资产: ¥${metricsData.final_asset?.toFixed(2)}, 累计收益: ${metricsData.metrics?.total_return?.toFixed(2)}%, 交易笔数: ${metricsData.trades?.length || 0}`, 'success');
+
+      // 更新看板
+      renderSandboxDashboard(metricsData, symbol, startDate, endDate);
+    } catch (err) {
+      runBtn.classList.remove('loading');
+      updateSandboxStatus('error', '网络异常');
+      logSandboxConsole(`网络或服务器异常: ${err.message}`, 'error');
+    }
+  });
+}
+
+function updateSandboxStatus(status, text) {
+  const badge = document.getElementById('sandbox-status-badge');
+  const timeEl = document.getElementById('sandbox-diag-time');
+  if (badge) {
+    badge.className = `badge-status ${status}`;
+    badge.textContent = text;
+  }
+  if (timeEl) {
+    timeEl.textContent = new Date().toLocaleTimeString();
+  }
+}
+
+function logSandboxConsole(msg, type = 'info') {
+  const logBox = document.getElementById('sandbox-diagnostics-log');
+  if (!logBox) return;
+  const line = document.createElement('div');
+  line.className = `console-line ${type}`;
+  line.textContent = msg;
+  logBox.appendChild(line);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function renderSandboxDashboard(data, symbol, startDate, endDate) {
+  const m = data;
+  document.getElementById('sb-disp-symbol').textContent = `${symbol}`;
+  document.getElementById('sb-disp-name').textContent = data.strategy_name || '自定义策略';
+  document.getElementById('sb-disp-range').textContent = `${startDate} 至 ${endDate}`;
+  document.getElementById('sb-disp-final-asset').textContent = `¥${(data.final_asset || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+
+  // 指标卡片
+  const tot = m.total_return || 0;
+  const bmk = m.benchmark_return || 0;
+  const excess = tot - bmk;
+
+  const totEl = document.getElementById('sb-m-total-return');
+  totEl.textContent = `${tot > 0 ? '+' : ''}${tot.toFixed(2)}%`;
+  totEl.className = `metric-value ${tot >= 0 ? 'text-green' : 'text-red'}`;
+
+  const excessBadge = document.getElementById('sb-excess-badge');
+  excessBadge.textContent = `超额 ${excess > 0 ? '+' : ''}${excess.toFixed(2)}%`;
+  excessBadge.className = `metric-badge ${excess >= 0 ? 'positive' : 'danger'}`;
+
+  document.getElementById('sb-m-bmk-return').textContent = `${bmk.toFixed(2)}%`;
+  document.getElementById('sb-m-annual-return').textContent = `${(m.annualized_return || 0).toFixed(2)}%`;
+  document.getElementById('sb-m-bmk-annual').textContent = `${(m.benchmark_annual_return || 0).toFixed(2)}%`;
+  document.getElementById('sb-m-sharpe').textContent = (m.sharpe_ratio || 0).toFixed(2);
+  document.getElementById('sb-m-sortino').textContent = (m.sortino_ratio || 0).toFixed(2);
+  document.getElementById('sb-m-max-dd').textContent = `${(m.max_drawdown || 0).toFixed(2)}%`;
+  document.getElementById('sb-m-calmar').textContent = (m.calmar_ratio || 0).toFixed(2);
+  document.getElementById('sb-m-win-rate').textContent = `${(m.win_rate || 0).toFixed(1)}%`;
+  document.getElementById('sb-m-profit-loss').textContent = (m.profit_loss_ratio || 0).toFixed(2);
+  document.getElementById('sb-m-total-trades').textContent = m.total_trades || 0;
+  document.getElementById('sb-m-win-loss').textContent = `${m.winning_trades || 0} / ${m.losing_trades || 0}`;
+
+  // 图表渲染
+  renderSandboxChart();
+
+  // 成交记录
+  renderSandboxTrades(data.trades || []);
+}
+
+function renderSandboxChart() {
+  if (!sandboxState.chart || !sandboxState.currentResult) return;
+  const data = sandboxState.currentResult;
+  const eqCurve = data.equity_curve || [];
+  const bmkCurve = data.benchmark_curve || [];
+  const ddCurve = data.drawdown_curve || [];
+  if (eqCurve.length === 0) return;
+
+  const dates = eqCurve.map(d => d.date);
+
+  if (sandboxState.activeTab === 'equity') {
+    const stratNav = eqCurve.map(d => d.value);
+    const bmkNav = bmkCurve.map(d => d.value || 1.0);
+
+    const option = {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(17, 22, 34, 0.95)',
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        textStyle: { color: '#f8fafc', fontSize: 12 },
+        formatter: (params) => {
+          let s = `<div style="font-weight:600;margin-bottom:4px;">${params[0].axisValue}</div>`;
+          params.forEach(p => {
+            const ret = ((p.value - 1) * 100).toFixed(2);
+            s += `<div>${p.marker} ${p.seriesName}: <b>${p.value.toFixed(4)}</b> (${ret > 0 ? '+' : ''}${ret}%)</div>`;
+          });
+          return s;
+        }
+      },
+      legend: { show: false },
+      grid: { left: '3%', right: '4%', top: '10%', bottom: '8%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.15)' } },
+        axisLabel: { color: '#64748b', fontSize: 11 }
+      },
+      yAxis: {
+        type: 'value',
+        scale: true,
+        splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } },
+        axisLabel: { color: '#64748b', fontSize: 11, formatter: v => v.toFixed(2) }
+      },
+      series: [
+        {
+          name: '沙箱净值',
+          type: 'line',
+          data: stratNav,
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { width: 2.5, color: '#38bdf8' },
+          areaStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: 'rgba(56, 189, 248, 0.25)' },
+              { offset: 1, color: 'rgba(56, 189, 248, 0.00)' }
+            ])
+          }
+        },
+        {
+          name: '沪深300',
+          type: 'line',
+          data: bmkNav,
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { width: 1.5, color: '#818cf8', type: 'dashed' }
+        }
+      ]
+    };
+    sandboxState.chart.setOption(option, true);
+  } else {
+    // 回撤曲线
+    const drawdowns = ddCurve.map(d => d.value);
+    const option = {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params) => `${params[0].axisValue}<br/>动态回撤: <b style="color:#f43f5e">${params[0].value}%</b>`
+      },
+      grid: { left: '3%', right: '4%', top: '10%', bottom: '8%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.15)' } },
+        axisLabel: { color: '#64748b', fontSize: 11 }
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { color: '#64748b', fontSize: 11, formatter: v => `${v}%` },
+        splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+      },
+      series: [
+        {
+          name: '水下回撤',
+          type: 'line',
+          data: drawdowns,
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { width: 2, color: '#f43f5e' },
+          areaStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: 'rgba(244, 63, 94, 0.05)' },
+              { offset: 1, color: 'rgba(244, 63, 94, 0.35)' }
+            ])
+          }
+        }
+      ]
+    };
+    sandboxState.chart.setOption(option, true);
+  }
+}
+
+function renderSandboxTrades(trades) {
+  const tbody = document.getElementById('sb-trades-table-body');
+  const countEl = document.getElementById('sb-trades-count');
+  if (!tbody) return;
+
+  countEl && (countEl.textContent = trades.length);
+  if (!trades || trades.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="10" class="empty-cell">该沙箱回测无成交触发</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = '';
+  trades.forEach(t => {
+    const tr = document.createElement('tr');
+    const isBuy = t.action === 'BUY';
+    const pnlClass = t.realized_pnl > 0 ? 'text-green' : (t.realized_pnl < 0 ? 'text-red' : '');
+
+    tr.innerHTML = `
+      <td>${t.timestamp}</td>
+      <td>${t.symbol}</td>
+      <td><span class="tag-action ${isBuy ? 'buy' : 'sell'}">${isBuy ? '买入' : '卖出'}</span></td>
+      <td>¥${t.price.toFixed(2)}</td>
+      <td>${t.shares}股</td>
+      <td>¥${t.commission.toFixed(2)}</td>
+      <td>¥${t.stamp_tax.toFixed(2)}</td>
+      <td>¥${t.total_cost.toFixed(2)}</td>
+      <td class="${pnlClass}">${isBuy ? '--' : `¥${t.realized_pnl > 0 ? '+' : ''}${t.realized_pnl.toFixed(2)}`}</td>
+      <td>¥${t.cash_after.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+/* ==========================================================================
+   Phase 2: 可视化因子投研分析中心 (Factor Research & Analysis Center)
+   ========================================================================== */
+const factorState = {
+  factors: [],
+  currentResult: null,
+  activeTab: 'nav',
+  chart: null
+};
+
+function initFactorResearch() {
+  const factorSelect = document.getElementById('factor-select');
+  const symbolsInput = document.getElementById('factor-symbols-input');
+  const analyzeBtn = document.getElementById('factor-analyze-btn');
+  const chartEl = document.getElementById('factor-main-chart');
+
+  if (chartEl) {
+    factorState.chart = echarts.init(chartEl);
+    window.addEventListener('resize', () => {
+      factorState.chart && factorState.chart.resize();
+    });
+  }
+
+  // 1. 加载因子列表
+  fetch('/api/factors/available')
+    .then(res => res.json())
+    .then(data => {
+      if (data && data.factors) {
+        factorState.factors = data.factors;
+        factorSelect.innerHTML = '';
+        data.factors.forEach(f => {
+          const opt = document.createElement('option');
+          opt.value = f.id;
+          opt.textContent = `${f.name} [${f.category}]`;
+          factorSelect.appendChild(opt);
+        });
+
+        // 更新首个因子的元数据
+        if (data.factors[0]) {
+          updateFactorMeta(data.factors[0]);
+        }
+      }
+    })
+    .catch(err => console.error('获取因子列表失败:', err));
+
+  factorSelect && factorSelect.addEventListener('change', () => {
+    const selected = factorState.factors.find(f => f.id === factorSelect.value);
+    if (selected) {
+      updateFactorMeta(selected);
+    }
+  });
+
+  function updateFactorMeta(f) {
+    const catEl = document.getElementById('factor-category-tag');
+    const formulaEl = document.getElementById('factor-formula-text');
+    const descEl = document.getElementById('factor-desc-text');
+    if (catEl) catEl.textContent = f.category;
+    if (formulaEl) formulaEl.textContent = f.formula;
+    if (descEl) descEl.textContent = f.description;
+  }
+
+  // 2. 标的池快捷按键
+  const poolShortcuts = {
+    etf: '510300,510500,513100,518880,511010',
+    bluechip: '600519,000858,300750,002594,601318,600036,000333,600900,601899,300059',
+    growth: '300750,002475,688981,002230,300033,688012'
+  };
+
+  document.querySelectorAll('[data-fpool]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-fpool]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const poolKey = btn.dataset.fpool;
+      if (poolShortcuts[poolKey]) {
+        symbolsInput.value = poolShortcuts[poolKey];
+      }
+    });
+  });
+
+  // 3. 图表 Tab 切换
+  document.querySelectorAll('[data-factab]').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('[data-factab]').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      factorState.activeTab = tab.dataset.factab;
+      renderFactorChart();
+    });
+  });
+
+  // 4. 运行因子分析
+  analyzeBtn && analyzeBtn.addEventListener('click', async () => {
+    const factorName = factorSelect.value || 'momentum_20';
+    const rawSymbols = symbolsInput.value.replace(/;/g, ',').replace(/\s+/g, ',').split(',');
+    const symbols = rawSymbols.map(s => s.trim()).filter(s => s.length > 0);
+    const horizonRadio = document.querySelector('input[name="forward-horizon"]:checked');
+    const forwardPeriod = horizonRadio ? parseInt(horizonRadio.value) : 5;
+
+    if (symbols.length < 2) {
+      alert('因子截面分析需要至少提供 2 只标的！');
+      return;
+    }
+
+    analyzeBtn.classList.add('loading');
+
+    try {
+      const resp = await fetch('/api/factors/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          factor_name: factorName,
+          symbols: symbols,
+          start_date: '2023-01-01',
+          end_date: '2024-01-01',
+          forward_period: forwardPeriod,
+          quantiles: 5
+        })
+      });
+
+      const res = await resp.json();
+      analyzeBtn.classList.remove('loading');
+
+      if (res.code !== 200) {
+        alert(`因子分析异常: ${res.detail || res.message}`);
+        return;
+      }
+
+      factorState.currentResult = res.data;
+      renderFactorDashboard(res.data);
+    } catch (err) {
+      analyzeBtn.classList.remove('loading');
+      alert(`网络或接口异常: ${err.message}`);
+    }
+  });
+}
+
+function renderFactorDashboard(data) {
+  const m = data.metrics || {};
+
+  // Rank-IC Mean
+  const meanIc = m.ic_mean || 0;
+  const icEl = document.getElementById('factor-m-ic-mean');
+  icEl.textContent = meanIc.toFixed(4);
+  icEl.className = `metric-value ${meanIc > 0 ? 'highlight-cyan' : 'text-red'}`;
+
+  const icBadge = document.getElementById('factor-ic-badge');
+  if (Math.abs(meanIc) >= 0.05) {
+    icBadge.textContent = '显著有效';
+    icBadge.className = 'metric-badge positive';
+  } else if (Math.abs(meanIc) >= 0.02) {
+    icBadge.textContent = '弱有效';
+    icBadge.className = 'metric-badge neutral';
+  } else {
+    icBadge.textContent = '无明显相关';
+    icBadge.className = 'metric-badge danger';
+  }
+
+  document.getElementById('factor-m-ic-std').textContent = (m.ic_std || 0).toFixed(4);
+  document.getElementById('factor-m-ic-ir').textContent = (m.ic_ir || 0).toFixed(2);
+  document.getElementById('factor-m-ann-ir').textContent = (m.annualized_ir || 0).toFixed(2);
+  document.getElementById('factor-m-pos-ratio').textContent = `${(m.positive_ic_ratio || 0).toFixed(1)}%`;
+  document.getElementById('factor-m-tstat').textContent = (m.ic_t_stat || 0).toFixed(2);
+
+  // 多空收益
+  const lsRet = m.long_short_return || 0;
+  const lsEl = document.getElementById('factor-m-ls-return');
+  lsEl.textContent = `${lsRet > 0 ? '+' : ''}${lsRet.toFixed(2)}%`;
+  lsEl.className = `metric-value ${lsRet >= 0 ? 'text-green' : 'text-red'}`;
+
+  document.getElementById('factor-m-ls-annual').textContent = `${(m.long_short_annual || 0).toFixed(2)}%`;
+  document.getElementById('factor-m-ls-maxdd').textContent = `${(m.long_short_max_dd || 0).toFixed(2)}%`;
+  document.getElementById('factor-m-mono-score').textContent = (m.monotonicity_score || 0).toFixed(2);
+
+  // 渲染图表
+  renderFactorChart();
+
+  // 渲染分层绩效表
+  renderFactorGroupTable(data.group_stats || []);
+}
+
+function renderFactorChart() {
+  if (!factorState.chart || !factorState.currentResult) return;
+  const data = factorState.currentResult;
+
+  if (factorState.activeTab === 'nav') {
+    // 5 组分层净值曲线 + 多空对冲线
+    const dates = data.nav_dates || [];
+    const qNavs = data.quantile_navs || {};
+    const lsNav = data.long_short_nav || [];
+
+    const palette = ['#ef4444', '#38bdf8', '#818cf8', '#94a3b8', '#64748b'];
+
+    const series = [];
+    Object.keys(qNavs).forEach((gKey, idx) => {
+      series.push({
+        name: `${gKey} 分组`,
+        type: 'line',
+        data: qNavs[gKey],
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: idx === 0 ? 2.5 : 1.5, color: palette[idx % palette.length] }
+      });
+    });
+
+    if (lsNav.length > 0) {
+      series.push({
+        name: '多空对冲 (Long-Short)',
+        type: 'line',
+        data: lsNav,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 3, color: '#10b981' }
+      });
+    }
+
+    const option = {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(17, 22, 34, 0.95)',
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        textStyle: { color: '#f8fafc', fontSize: 12 },
+        formatter: (params) => {
+          let s = `<div style="font-weight:600;margin-bottom:4px;">${params[0].axisValue}</div>`;
+          params.forEach(p => {
+            const ret = ((p.value - 1) * 100).toFixed(2);
+            s += `<div>${p.marker} ${p.seriesName}: <b>${p.value.toFixed(4)}</b> (${ret > 0 ? '+' : ''}${ret}%)</div>`;
+          });
+          return s;
+        }
+      },
+      legend: {
+        show: true,
+        top: 0,
+        textStyle: { color: '#94a3b8', fontSize: 11 }
+      },
+      grid: { left: '3%', right: '4%', top: '14%', bottom: '8%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.15)' } },
+        axisLabel: { color: '#64748b', fontSize: 11 }
+      },
+      yAxis: {
+        type: 'value',
+        scale: true,
+        splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } },
+        axisLabel: { color: '#64748b', fontSize: 11, formatter: v => v.toFixed(2) }
+      },
+      series: series
+    };
+    factorState.chart.setOption(option, true);
+  } else if (factorState.activeTab === 'ic') {
+    // Rank-IC 每日时序柱状图 + 累计 IC 曲线 (双轴)
+    const icSeries = data.ic_series || [];
+    const dates = icSeries.map(d => d.date);
+    const dailyIc = icSeries.map(d => d.ic);
+    const cumIc = icSeries.map(d => d.cumulative_ic);
+
+    const option = {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(17, 22, 34, 0.95)',
+        textStyle: { color: '#f8fafc', fontSize: 12 }
+      },
+      legend: {
+        show: true,
+        top: 0,
+        textStyle: { color: '#94a3b8', fontSize: 11 }
+      },
+      grid: { left: '3%', right: '4%', top: '14%', bottom: '8%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.15)' } },
+        axisLabel: { color: '#64748b', fontSize: 11 }
+      },
+      yAxis: [
+        {
+          type: 'value',
+          name: '每日 Rank-IC',
+          nameTextStyle: { color: '#64748b', fontSize: 11 },
+          splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } },
+          axisLabel: { color: '#64748b', fontSize: 11, formatter: v => v.toFixed(2) }
+        },
+        {
+          type: 'value',
+          name: '累计 IC',
+          nameTextStyle: { color: '#38bdf8', fontSize: 11 },
+          splitLine: { show: false },
+          axisLabel: { color: '#38bdf8', fontSize: 11, formatter: v => v.toFixed(2) }
+        }
+      ],
+      series: [
+        {
+          name: 'Rank-IC',
+          type: 'bar',
+          yAxisIndex: 0,
+          data: dailyIc,
+          itemStyle: {
+            color: (params) => params.value >= 0 ? '#ef4444' : '#10b981'
+          }
+        },
+        {
+          name: '累计 IC 趋势',
+          type: 'line',
+          yAxisIndex: 1,
+          data: cumIc,
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { width: 2.5, color: '#38bdf8' }
+        }
+      ]
+    };
+    factorState.chart.setOption(option, true);
+  } else if (factorState.activeTab === 'group_bar') {
+    // 各分组年化收益柱状图
+    const stats = data.group_stats || [];
+    const groups = stats.map(s => s.group);
+    const annReturns = stats.map(s => s.annual_return);
+    const sharpes = stats.map(s => s.sharpe_ratio);
+
+    const option = {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' }
+      },
+      legend: {
+        show: true,
+        top: 0,
+        textStyle: { color: '#94a3b8', fontSize: 11 }
+      },
+      grid: { left: '3%', right: '4%', top: '14%', bottom: '8%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: groups,
+        axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.15)' } },
+        axisLabel: { color: '#94a3b8', fontSize: 12 }
+      },
+      yAxis: [
+        {
+          type: 'value',
+          name: '年化收益率 (%)',
+          nameTextStyle: { color: '#64748b', fontSize: 11 },
+          splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } },
+          axisLabel: { color: '#64748b', fontSize: 11, formatter: v => `${v}%` }
+        },
+        {
+          type: 'value',
+          name: '夏普比率',
+          nameTextStyle: { color: '#06b6d4', fontSize: 11 },
+          splitLine: { show: false },
+          axisLabel: { color: '#06b6d4', fontSize: 11 }
+        }
+      ],
+      series: [
+        {
+          name: '年化收益率 (%)',
+          type: 'bar',
+          yAxisIndex: 0,
+          data: annReturns,
+          itemStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: '#6366f1' },
+              { offset: 1, color: '#4338ca' }
+            ]),
+            borderRadius: [4, 4, 0, 0]
+          }
+        },
+        {
+          name: '夏普比率',
+          type: 'line',
+          yAxisIndex: 1,
+          data: sharpes,
+          lineStyle: { width: 3, color: '#06b6d4' },
+          itemStyle: { color: '#06b6d4' }
+        }
+      ]
+    };
+    factorState.chart.setOption(option, true);
+  }
+}
+
+function renderFactorGroupTable(stats) {
+  const tbody = document.getElementById('factor-group-table-body');
+  if (!tbody) return;
+
+  if (!stats || stats.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-cell">无分层统计数据</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = '';
+  stats.forEach((s, idx) => {
+    const tr = document.createElement('tr');
+    const isTop = idx === 0;
+    const isBottom = idx === stats.length - 1;
+    const label = isTop ? 'Top 20% 优势多头' : (isBottom ? 'Bottom 20% 劣势空头' : `中间分层梯队 ${idx+1}`);
+
+    const totClass = s.total_return > 0 ? 'text-green' : (s.total_return < 0 ? 'text-red' : '');
+    const annClass = s.annual_return > 0 ? 'text-green' : (s.annual_return < 0 ? 'text-red' : '');
+
+    tr.innerHTML = `
+      <td><b>${s.group}</b></td>
+      <td><span class="meta-tag" style="background:${isTop ? 'rgba(239, 68, 68, 0.2)' : 'rgba(255,255,255,0.06)'};color:${isTop ? '#f87171' : '#94a3b8'}">${label}</span></td>
+      <td class="${totClass}">${s.total_return > 0 ? '+' : ''}${s.total_return.toFixed(2)}%</td>
+      <td class="${annClass}">${s.annual_return > 0 ? '+' : ''}${s.annual_return.toFixed(2)}%</td>
+      <td class="text-red">${s.max_drawdown.toFixed(2)}%</td>
+      <td class="highlight-cyan">${s.sharpe_ratio.toFixed(2)}</td>
+      <td>${isTop ? '⭐ 建议超配' : (isBottom ? '⚠️ 建议规避/融券做空' : '持平中性')}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
