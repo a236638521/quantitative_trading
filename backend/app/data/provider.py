@@ -142,3 +142,64 @@ class MarketDataProvider:
         """获取对标基准指数的历史数据 (默认沪深300)"""
         norm_bmk = normalize_symbol(benchmark_symbol)
         return self.fetch_daily_bars(norm_bmk, start_date=start_date, end_date=end_date, adjust="none")
+
+    def fetch_multi_daily_bars(
+        self,
+        symbols: list[str],
+        start_date: str = "2023-01-01",
+        end_date: str = "2024-12-31",
+        adjust: str = "qfq"
+    ) -> dict[str, pd.DataFrame]:
+        """批量获取多只标的的日线数据"""
+        results = {}
+        for sym in symbols:
+            df = self.fetch_daily_bars(sym, start_date=start_date, end_date=end_date, adjust=adjust)
+            if not df.empty:
+                norm_sym = normalize_symbol(sym)
+                results[norm_sym] = df
+        return results
+
+    @staticmethod
+    def align_multi_bars(
+        data_dict: dict[str, pd.DataFrame],
+        benchmark_df: Optional[pd.DataFrame] = None
+    ) -> tuple[list[str], dict[str, pd.DataFrame]]:
+        """
+        对齐多标的时间轴（严格处理停牌、缺失并支持前值填充估值）
+        :return: (对齐后的全部交易日列表, 对齐后的各标的数据字典)
+        """
+        if not data_dict:
+            return [], {}
+
+        # 1. 确定基准交易日历 (若有基准数据以基准日历为准，否则取所有标的交易日并集)
+        if benchmark_df is not None and not benchmark_df.empty:
+            trading_dates = sorted(benchmark_df["date"].unique().tolist())
+        else:
+            all_dates = set()
+            for df in data_dict.values():
+                all_dates.update(df["date"].unique())
+            trading_dates = sorted(list(all_dates))
+
+        aligned_dict = {}
+        for sym, df in data_dict.items():
+            df_indexed = df.set_index("date")
+            # 重新索引到完整交易日历
+            reindexed = df_indexed.reindex(trading_dates)
+
+            # 停牌判定: 如果当日未在原表，标记为停牌
+            reindexed["is_suspended"] = reindexed["close"].isna()
+
+            # 收盘价前值填充以备每日估值，未成交量置0
+            reindexed["close"] = reindexed["close"].ffill().bfill()
+            reindexed["open"] = reindexed["open"].fillna(reindexed["close"])
+            reindexed["high"] = reindexed["high"].fillna(reindexed["close"])
+            reindexed["low"] = reindexed["low"].fillna(reindexed["close"])
+            reindexed["volume"] = reindexed["volume"].fillna(0.0)
+            reindexed["amount"] = reindexed["amount"].fillna(0.0)
+            reindexed["is_up_limit"] = reindexed["is_up_limit"].fillna(False)
+            reindexed["is_down_limit"] = reindexed["is_down_limit"].fillna(False)
+
+            aligned_df = reindexed.reset_index().rename(columns={"index": "date"})
+            aligned_dict[sym] = aligned_df
+
+        return trading_dates, aligned_dict

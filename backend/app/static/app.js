@@ -103,6 +103,10 @@ function bindEvents() {
     btn.addEventListener('click', (e) => {
       document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      if (btn.dataset.strategy) {
+        els.strategySelect.value = btn.dataset.strategy;
+        selectStrategy(btn.dataset.strategy);
+      }
       els.inputSymbol.value = btn.dataset.symbol;
       triggerBacktest();
     });
@@ -189,6 +193,22 @@ function selectStrategy(strategyId) {
   state.currentStrategyId = strategyId;
   const current = state.strategies.find(s => s.id === strategyId);
   if (!current) return;
+
+  // 根据策略是否为多标的组合，切换相关 UI 与默认标的池
+  const tabAlloc = document.getElementById('tab-allocation');
+  if (current.is_portfolio) {
+    if (tabAlloc) tabAlloc.style.display = 'inline-block';
+    if (current.default_pool && (!els.inputSymbol.value || !els.inputSymbol.value.includes(','))) {
+      els.inputSymbol.value = current.default_pool.join(', ');
+    }
+  } else {
+    if (tabAlloc) tabAlloc.style.display = 'none';
+    if (state.activeChartTab === 'allocation') {
+      state.activeChartTab = 'equity';
+      document.querySelectorAll('.chart-tab').forEach(t => t.classList.remove('active'));
+      document.querySelector('.chart-tab[data-tab="equity"]').classList.add('active');
+    }
+  }
 
   els.strategyDesc.textContent = current.description;
   els.paramsContainer.innerHTML = '';
@@ -365,7 +385,17 @@ async function renderActiveChart() {
     return;
   }
 
-  // 3. 常规时序图表 (净值曲线、K线蜡烛、水下回撤)
+  // 3. 资产配置变迁堆叠图 Tab
+  if (state.activeChartTab === 'allocation') {
+    els.mainChart.style.display = 'block';
+    els.monthlyMatrixContainer.style.display = 'none';
+    els.chartLegendBox.style.display = 'none';
+    state.chartInstance.resize();
+    renderAllocationStreamChart(state.backtestResult ? state.backtestResult.allocation_history || [] : []);
+    return;
+  }
+
+  // 4. 常规时序图表 (净值曲线、K线蜡烛、水下回撤)
   els.mainChart.style.display = 'block';
   els.monthlyMatrixContainer.style.display = 'none';
   els.chartLegendBox.style.display = (state.activeChartTab === 'equity' ? 'flex' : 'none');
@@ -382,6 +412,119 @@ async function renderActiveChart() {
   } else if (state.activeChartTab === 'drawdown') {
     renderDrawdownChart(data.drawdown_curve || []);
   }
+}
+
+// 绘制资产配置时序堆叠流图 (展示多资产组合在不同历史阶段持有的 ETF/股票比例)
+function renderAllocationStreamChart(allocationHistory) {
+  if (!allocationHistory || allocationHistory.length === 0) {
+    state.chartInstance.setOption({
+      title: {
+        text: '当前策略无资产配置时序数据，请在左侧选择【全天候ETF轮动策略】运行回测',
+        left: 'center',
+        top: 'middle',
+        textStyle: { color: '#64748b', fontSize: 13 }
+      }
+    });
+    return;
+  }
+
+  const dates = allocationHistory.map(a => a.date);
+
+  const allSymbols = new Set();
+  allocationHistory.forEach(a => {
+    Object.keys(a.weights || {}).forEach(k => allSymbols.add(k));
+  });
+  const symbolList = Array.from(allSymbols);
+
+  const nameMap = {
+    'sh.510300': '沪深300ETF (510300)',
+    'sh.510500': '中证500ETF (510500)',
+    'sh.513100': '纳斯达克ETF (513100)',
+    'sh.518880': '黄金ETF (518880)',
+    'sh.511010': '国债ETF (511010 避险)',
+    'sh.600519': '贵州茅台',
+    'sz.000858': '五粮液',
+    'sz.300750': '宁德时代',
+    'sz.002594': '比亚迪',
+    'sh.601318': '中国平安',
+    'sh.600036': '招商银行',
+    'sz.000333': '美的集团',
+    'sh.600900': '长江电力',
+    'sh.601899': '紫金矿业',
+    'sz.300059': '东方财富',
+    'CASH': '现金储备 (CASH)'
+  };
+
+  const series = symbolList.map(sym => {
+    const data = allocationHistory.map(a => {
+      const w = (a.weights && a.weights[sym] !== undefined) ? a.weights[sym] : 0.0;
+      return +(w * 100).toFixed(1);
+    });
+
+    return {
+      name: nameMap[sym] || sym,
+      type: 'line',
+      stack: 'Total',
+      smooth: true,
+      lineStyle: { width: 0.8 },
+      showSymbol: false,
+      areaStyle: { opacity: 0.82 },
+      emphasis: { focus: 'series' },
+      data: data
+    };
+  });
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross', label: { backgroundColor: '#1e293b' } },
+      backgroundColor: 'rgba(17, 22, 34, 0.95)',
+      borderColor: 'rgba(255, 255, 255, 0.1)',
+      textStyle: { color: '#f8fafc', fontSize: 12 },
+      formatter: function (params) {
+        let tip = `<div style="font-weight:600;margin-bottom:6px;">${params[0].axisValue} 资产配置结构</div>`;
+        params.forEach(p => {
+          if (p.value > 0) {
+            tip += `<div style="display:flex;justify-content:space-between;gap:12px;"><span>${p.marker} ${p.seriesName}</span><b>${p.value}%</b></div>`;
+          }
+        });
+        return tip;
+      }
+    },
+    legend: {
+      data: series.map(s => s.name),
+      textStyle: { color: '#94a3b8', fontSize: 11 },
+      top: 5
+    },
+    grid: {
+      left: '3%',
+      right: '4%',
+      top: '18%',
+      bottom: '15%',
+      containLabel: true
+    },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: dates,
+      axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+      axisLabel: { color: '#64748b', fontSize: 11 }
+    },
+    yAxis: {
+      type: 'value',
+      max: 100,
+      axisLabel: { color: '#64748b', fontSize: 11, formatter: '{value}%' },
+      splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+    },
+    dataZoom: [
+      { type: 'slider', show: true, bottom: 5, height: 20, fillerColor: 'rgba(99, 102, 241, 0.15)' },
+      { type: 'inside' }
+    ],
+    series: series
+  };
+
+  state.chartInstance.setOption(option);
 }
 
 // 1. 绘制净值与基准对比曲线

@@ -5,11 +5,14 @@ from pydantic import BaseModel, Field
 
 from ..config import BacktestConfig, TradingCostConfig
 from ..core.engine import BacktestEngine
+from ..core.portfolio_engine import PortfolioBacktestEngine
 from ..core.optimizer import GridSearchOptimizer
 from ..data.provider import MarketDataProvider, normalize_symbol
 from ..strategies.dual_ma import DualMAStrategy
 from ..strategies.turtle import TurtleStrategy
 from ..strategies.bollinger_grid import BollingerGridStrategy
+from ..strategies.etf_rotation import ETFMomentumRotationStrategy
+from ..strategies.multi_factor import MultiFactorStockSelectionStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +22,7 @@ data_provider = MarketDataProvider()
 STRATEGY_REGISTRY = {
     "DualMAStrategy": {
         "cls": DualMAStrategy,
+        "is_portfolio": False,
         "name": "双均线交叉策略",
         "description": "快线金叉慢线买入，死叉平仓。经典的顺势跟踪模型。",
         "default_params": {
@@ -38,6 +42,7 @@ STRATEGY_REGISTRY = {
     },
     "TurtleStrategy": {
         "cls": TurtleStrategy,
+        "is_portfolio": False,
         "name": "海龟唐奇安突破策略",
         "description": "突破20日通道高点建仓，跌破10日低点止损。顺应中长期单边趋势。",
         "default_params": {
@@ -59,6 +64,7 @@ STRATEGY_REGISTRY = {
     },
     "BollingerGridStrategy": {
         "cls": BollingerGridStrategy,
+        "is_portfolio": False,
         "name": "布林带均值回归策略",
         "description": "股价触碰下轨超跌建仓，触碰上轨超买止盈。适合宽基 ETF 或震荡箱体。",
         "default_params": {
@@ -75,12 +81,55 @@ STRATEGY_REGISTRY = {
             {"param": "period", "label": "均线周期", "default_range": [10, 15, 20, 30]},
             {"param": "num_std", "label": "标准差倍数", "default_range": [1.5, 2.0, 2.5, 3.0]}
         ]
+    },
+    "ETFMomentumRotationStrategy": {
+        "cls": ETFMomentumRotationStrategy,
+        "is_portfolio": True,
+        "name": "大类资产 ETF 动量轮动策略",
+        "description": "涵盖 A股大盘/中小盘/纳指/黄金/国债ETF，动态持有动量最强者，熊市普跌自动避险防守。",
+        "default_pool": ["510300", "510500", "513100", "518880", "511010"],
+        "default_params": {
+            "lookback_period": 20,
+            "top_n": 1,
+            "rebalance_freq": "weekly",
+            "use_risk_adjusted": True
+        },
+        "param_schema": [
+            {"key": "lookback_period", "label": "动量窗口 (日)", "type": "int", "default": 20, "min": 5, "max": 60},
+            {"key": "top_n", "label": "持有资产数量", "type": "int", "default": 1, "min": 1, "max": 3}
+        ],
+        "optimize_presets": [
+            {"param": "lookback_period", "label": "动量窗口", "default_range": [10, 15, 20, 25, 30]},
+            {"param": "top_n", "label": "持有数量", "default_range": [1, 2]}
+        ]
+    },
+    "MultiFactorStockSelectionStrategy": {
+        "cls": MultiFactorStockSelectionStrategy,
+        "is_portfolio": True,
+        "name": "核心蓝筹多因子截面选股策略",
+        "description": "在核心蓝筹池中，月初按动量、均线趋势与低波动三因子打分，精选 Top 3 标的等权换仓。",
+        "default_pool": ["600519", "000858", "300750", "002594", "601318", "600036", "000333", "600900", "601899", "300059"],
+        "default_params": {
+            "top_n": 3,
+            "lookback_period": 20,
+            "weight_momentum": 0.5,
+            "weight_trend": 0.3,
+            "weight_low_vol": 0.2
+        },
+        "param_schema": [
+            {"key": "top_n", "label": "持股数量 (只)", "type": "int", "default": 3, "min": 2, "max": 5},
+            {"key": "lookback_period", "label": "特征窗口 (日)", "type": "int", "default": 20, "min": 10, "max": 60}
+        ],
+        "optimize_presets": [
+            {"param": "lookback_period", "label": "特征窗口", "default_range": [10, 15, 20, 30]},
+            {"param": "top_n", "label": "持股数量", "default_range": [2, 3, 5]}
+        ]
     }
 }
 
 
 class BacktestRequest(BaseModel):
-    symbol: str = Field(default="510300", description="标的代码 (如 510300 或 600519)")
+    symbol: str = Field(default="510300", description="标的代码 (单只代码或多标的逗号分隔池)")
     start_date: str = Field(default="2023-01-01", description="回测开始日期")
     end_date: str = Field(default="2024-01-01", description="回测结束日期")
     strategy_name: str = Field(default="DualMAStrategy", description="策略标识")
@@ -128,6 +177,8 @@ def list_strategies():
             "id": key,
             "name": item["name"],
             "description": item["description"],
+            "is_portfolio": item.get("is_portfolio", False),
+            "default_pool": item.get("default_pool", []),
             "default_params": item["default_params"],
             "param_schema": item["param_schema"],
             "optimize_presets": item.get("optimize_presets", [])
@@ -137,28 +188,21 @@ def list_strategies():
 
 @router.post("/backtest/run")
 def run_backtest(req: BacktestRequest):
-    """运行量化策略回测"""
+    """运行量化策略回测 (支持单标的技术面策略与多资产/ETF组合轮动策略)"""
     if req.strategy_name not in STRATEGY_REGISTRY:
         raise HTTPException(status_code=400, detail=f"未知策略: {req.strategy_name}")
 
-    # 1. 获取标的历史行情
-    df = data_provider.fetch_daily_bars(
-        symbol=req.symbol,
-        start_date=req.start_date,
-        end_date=req.end_date,
-        adjust="qfq"
-    )
-    if df.empty:
-        raise HTTPException(status_code=400, detail=f"未获取到标的 {req.symbol} 在指定时间段内的行情数据")
+    strat_item = STRATEGY_REGISTRY[req.strategy_name]
+    is_portfolio = strat_item.get("is_portfolio", False)
 
-    # 2. 获取基准数据
+    # 1. 获取基准数据
     bmk_df = data_provider.fetch_benchmark_bars(
         benchmark_symbol=req.benchmark_symbol,
         start_date=req.start_date,
         end_date=req.end_date
     )
 
-    # 3. 构造费用与回测配置
+    # 2. 构造费用与回测配置
     cost_cfg = TradingCostConfig(
         commission_rate=req.commission_rate,
         min_commission=req.min_commission,
@@ -174,25 +218,68 @@ def run_backtest(req: BacktestRequest):
         enforce_price_limits=req.enforce_price_limits
     )
 
-    # 4. 实例化策略
-    strat_item = STRATEGY_REGISTRY[req.strategy_name]
+    # 3. 实例化策略
     merged_params = strat_item["default_params"].copy()
     merged_params.update(req.strategy_params)
     strategy_instance = strat_item["cls"](params=merged_params)
 
-    # 5. 执行回测
-    engine = BacktestEngine(config=backtest_cfg)
-    try:
-        results = engine.run(
-            strategy=strategy_instance,
-            data_df=df,
-            benchmark_df=bmk_df,
-            symbol=req.symbol
+    # 4. 执行回测分支：多资产组合 vs 单标的
+    if is_portfolio:
+        # 解析标的池
+        default_pool = strat_item.get("default_pool", ["510300", "510500", "518880", "511010"])
+        input_sym = req.symbol.strip()
+        if "," in input_sym or " " in input_sym or ";" in input_sym:
+            pool = [s.strip() for s in input_sym.replace(";", ",").replace(" ", ",").split(",") if s.strip()]
+        else:
+            pool = default_pool
+
+        # 批量获取多标的行情并对齐日历
+        data_dict = data_provider.fetch_multi_daily_bars(
+            symbols=pool,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            adjust="qfq"
         )
-        return {"code": 200, "message": "回测成功", "data": results}
-    except Exception as e:
-        logger.exception("回测运行异常")
-        raise HTTPException(status_code=500, detail=f"回测运行异常: {str(e)}")
+        if not data_dict:
+            raise HTTPException(status_code=400, detail="组合标的行情数据获取失败")
+
+        trading_dates, aligned_dict = data_provider.align_multi_bars(data_dict, bmk_df)
+
+        port_engine = PortfolioBacktestEngine(config=backtest_cfg)
+        try:
+            results = port_engine.run(
+                strategy=strategy_instance,
+                data_dict=aligned_dict,
+                trading_dates=trading_dates,
+                benchmark_df=bmk_df
+            )
+            return {"code": 200, "message": "组合回测成功", "data": results}
+        except Exception as e:
+            logger.exception("组合回测运行异常")
+            raise HTTPException(status_code=500, detail=f"组合回测运行异常: {str(e)}")
+    else:
+        # 单标的回测
+        df = data_provider.fetch_daily_bars(
+            symbol=req.symbol,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            adjust="qfq"
+        )
+        if df.empty:
+            raise HTTPException(status_code=400, detail=f"未获取到标的 {req.symbol} 的行情数据")
+
+        engine = BacktestEngine(config=backtest_cfg)
+        try:
+            results = engine.run(
+                strategy=strategy_instance,
+                data_df=df,
+                benchmark_df=bmk_df,
+                symbol=req.symbol
+            )
+            return {"code": 200, "message": "回测成功", "data": results}
+        except Exception as e:
+            logger.exception("回测运行异常")
+            raise HTTPException(status_code=500, detail=f"回测运行异常: {str(e)}")
 
 
 @router.post("/backtest/optimize")

@@ -38,9 +38,8 @@
         <span class="preset-label">标的速选:</span>
         <button class="preset-btn active" data-symbol="510300" data-name="300ETF">510300 沪深300ETF</button>
         <button class="preset-btn" data-symbol="600519" data-name="贵州茅台">600519 贵州茅台</button>
-        <button class="preset-btn" data-symbol="000001" data-name="平安银行">000001 平安银行</button>
-        <button class="preset-btn" data-symbol="300750" data-name="宁德时代">300750 宁德时代</button>
-        <button class="preset-btn" data-symbol="512010" data-name="医药ETF">512010 医药ETF</button>
+        <button class="preset-btn" data-strategy="ETFMomentumRotationStrategy" data-symbol="510300,510500,513100,518880,511010" data-name="ETF轮动">🌐 全天候ETF轮动池</button>
+        <button class="preset-btn" data-strategy="MultiFactorStockSelectionStrategy" data-symbol="600519,000858,300750,002594,601318,600036" data-name="多因子蓝筹">💎 核心蓝筹多因子</button>
       </div>
 
       <div class="header-badges">
@@ -284,6 +283,7 @@
           <div class="chart-header">
             <div class="chart-tabs">
               <button class="chart-tab active" data-tab="equity">净值曲线对比</button>
+              <button class="chart-tab" data-tab="allocation" id="tab-allocation">资产配置变迁堆叠</button>
               <button class="chart-tab" data-tab="kline">标的K线与买卖点</button>
               <button class="chart-tab" data-tab="drawdown">水下动态回撤</button>
               <button class="chart-tab" data-tab="monthly">月度收益热力表</button>
