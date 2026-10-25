@@ -38,3 +38,8 @@ data/cache/
 .DS_Store
 Thumbs.db
 .env
+tools/
+*.exe
+tunnel_url.txt
+启动公网穿透服务.bat
+
