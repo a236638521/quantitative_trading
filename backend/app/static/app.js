@@ -1,5 +1,6 @@
 /**
  * AlphaQuant - A股全栈量化策略研究与回测看板交互逻辑
+ * 支持：A股真实数据回测、月度收益热力矩阵、参数网格寻优与2D敏感性热力图
  */
 
 // 全局状态管理
@@ -7,6 +8,7 @@ const state = {
   strategies: [],
   currentStrategyId: null,
   backtestResult: null,
+  optimizationResult: null,
   activeChartTab: 'equity',
   chartInstance: null,
   cachedKline: null
@@ -28,12 +30,22 @@ const els = {
   checkT1: document.getElementById('check-t1'),
   checkLimits: document.getElementById('check-limits'),
   runBtn: document.getElementById('run-btn'),
+  optimizeBtn: document.getElementById('optimize-btn'),
+  selectTargetMetric: document.getElementById('select-target-metric'),
   backtestForm: document.getElementById('backtest-form'),
   toggleCostBtn: document.getElementById('toggle-cost-btn'),
   costPanel: document.getElementById('cost-panel'),
+
   mainChart: document.getElementById('main-chart'),
+  monthlyMatrixContainer: document.getElementById('monthly-matrix-container'),
+  matrixTbody: document.getElementById('matrix-tbody'),
+  chartLegendBox: document.getElementById('chart-legend-box'),
+  tabOptHeatmap: document.getElementById('tab-opt-heatmap'),
+  tabPaneOpt: document.getElementById('tab-pane-opt'),
+
   tradesCount: document.getElementById('trades-count'),
   tradesTableBody: document.getElementById('trades-table-body'),
+  optTableBody: document.getElementById('opt-table-body'),
   logsContainer: document.getElementById('logs-container'),
 
   // 展示与指标
@@ -119,6 +131,13 @@ function bindEvents() {
     e.preventDefault();
     triggerBacktest();
   });
+
+  // 启动参数网格寻优
+  if (els.optimizeBtn) {
+    els.optimizeBtn.addEventListener('click', () => {
+      triggerOptimization();
+    });
+  }
 
   // 图表 Tab 切换
   document.querySelectorAll('.chart-tab').forEach(tab => {
@@ -321,10 +340,38 @@ function renderMetrics(data) {
   els.mWinLossCount.textContent = `${data.winning_trades} 胜 / ${data.losing_trades} 负`;
 }
 
-// 根据当前选中的 Tab 绘制图表
+// 根据当前选中的 Tab 绘制图表或月度矩阵
 async function renderActiveChart() {
-  if (!state.backtestResult || !state.chartInstance) return;
+  if (!state.chartInstance) return;
 
+  // 1. 月度收益热力表 Tab
+  if (state.activeChartTab === 'monthly') {
+    els.mainChart.style.display = 'none';
+    els.monthlyMatrixContainer.style.display = 'block';
+    els.chartLegendBox.style.display = 'none';
+    if (state.backtestResult && state.backtestResult.monthly_returns) {
+      renderMonthlyMatrix(state.backtestResult.monthly_returns);
+    }
+    return;
+  }
+
+  // 2. 参数敏感性热力图 Tab
+  if (state.activeChartTab === 'heatmap') {
+    els.mainChart.style.display = 'block';
+    els.monthlyMatrixContainer.style.display = 'none';
+    els.chartLegendBox.style.display = 'none';
+    state.chartInstance.resize();
+    renderOptimizationHeatmap();
+    return;
+  }
+
+  // 3. 常规时序图表 (净值曲线、K线蜡烛、水下回撤)
+  els.mainChart.style.display = 'block';
+  els.monthlyMatrixContainer.style.display = 'none';
+  els.chartLegendBox.style.display = (state.activeChartTab === 'equity' ? 'flex' : 'none');
+  state.chartInstance.resize();
+
+  if (!state.backtestResult) return;
   const data = state.backtestResult;
   state.chartInstance.clear();
 
@@ -424,7 +471,6 @@ function renderEquityChart(equityCurve, benchmarkCurve) {
 
 // 2. 绘制标的 K 线与买卖点标记
 async function renderKlineChart(symbol, trades) {
-  // 获取 K 线行情数据
   let klineData = state.cachedKline;
   if (!klineData || klineData.symbol !== symbol) {
     try {
@@ -439,10 +485,8 @@ async function renderKlineChart(symbol, trades) {
   }
 
   const dates = klineData.map(d => d.date);
-  // ECharts Candlestick 顺序: [open, close, low, high]
   const oclh = klineData.map(d => [d.open, d.close, d.low, d.high]);
 
-  // 构造买卖点 markPoint
   const markData = [];
   trades.forEach(t => {
     const isBuy = t.action === 'BUY';
@@ -490,8 +534,8 @@ async function renderKlineChart(symbol, trades) {
         type: 'candlestick',
         data: oclh,
         itemStyle: {
-          color: '#ef4444',         // 阳线红
-          color0: '#10b981',        // 阴线绿
+          color: '#ef4444',
+          color0: '#10b981',
           borderColor: '#ef4444',
           borderColor0: '#10b981'
         },
@@ -555,6 +599,295 @@ function renderDrawdownChart(drawdownCurve) {
   };
 
   state.chartInstance.setOption(option);
+}
+
+// 4. 渲染月度收益热力矩阵
+function renderMonthlyMatrix(monthlyData) {
+  if (!monthlyData || !monthlyData.years || monthlyData.years.length === 0) {
+    els.matrixTbody.innerHTML = `<tr><td colspan="14" class="empty-cell">暂无月度收益数据</td></tr>`;
+    return;
+  }
+
+  els.matrixTbody.innerHTML = '';
+  const sortedYears = [...monthlyData.years].reverse();
+
+  sortedYears.forEach(year => {
+    const yData = monthlyData.data[year] || {};
+    const tr = document.createElement('tr');
+
+    let html = `<td class="matrix-year-cell">${year}</td>`;
+
+    // 1~12 月
+    for (let m = 1; m <= 12; m++) {
+      const val = yData[String(m)];
+      if (val !== null && val !== undefined) {
+        const isPos = val >= 0;
+        const colorClass = isPos ? 'cell-pos' : 'cell-neg';
+        // A股红涨绿跌，计算背景饱和度
+        const opacity = Math.min(Math.abs(val) / 8.0 * 0.45 + 0.08, 0.55).toFixed(2);
+        const bg = isPos ? `rgba(239, 68, 68, ${opacity})` : `rgba(16, 185, 129, ${opacity})`;
+        const sign = val > 0 ? '+' : '';
+        html += `<td class="${colorClass}" style="background-color: ${bg};" title="${year}年${m}月: ${sign}${val.toFixed(2)}%">${sign}${val.toFixed(1)}%</td>`;
+      } else {
+        html += `<td style="color: #475569;">-</td>`;
+      }
+    }
+
+    // 全年累计
+    const totalVal = yData['total'];
+    if (totalVal !== null && totalVal !== undefined) {
+      const isPos = totalVal >= 0;
+      const colorClass = isPos ? 'cell-pos' : 'cell-neg';
+      const opacity = Math.min(Math.abs(totalVal) / 20.0 * 0.5 + 0.1, 0.65).toFixed(2);
+      const bg = isPos ? `rgba(239, 68, 68, ${opacity})` : `rgba(16, 185, 129, ${opacity})`;
+      const sign = totalVal > 0 ? '+' : '';
+      html += `<td class="matrix-total-cell ${colorClass}" style="background-color: ${bg};" title="${year}全年: ${sign}${totalVal.toFixed(2)}%">${sign}${totalVal.toFixed(2)}%</td>`;
+    } else {
+      html += `<td class="matrix-total-cell" style="color: #475569;">-</td>`;
+    }
+
+    tr.innerHTML = html;
+    els.matrixTbody.appendChild(tr);
+  });
+}
+
+// 5. 触发参数网格寻优
+async function triggerOptimization() {
+  const symbol = els.inputSymbol.value.trim();
+  if (!symbol) {
+    alert('请输入股票或ETF代码');
+    return;
+  }
+
+  els.optimizeBtn.classList.add('loading');
+  els.optimizeBtn.disabled = true;
+
+  const targetMetric = els.selectTargetMetric.value;
+
+  const payload = {
+    symbol: symbol,
+    start_date: els.inputStartDate.value,
+    end_date: els.inputEndDate.value,
+    strategy_name: state.currentStrategyId || 'DualMAStrategy',
+    target_metric: targetMetric,
+    initial_cash: parseFloat(els.inputCash.value) || 100000,
+    commission_rate: parseFloat(els.inputCommission.value) || 0.00025,
+    min_commission: parseFloat(els.inputMinCommission.value) || 5.0,
+    stamp_tax_rate: parseFloat(els.inputStampTax.value) || 0.0005,
+    transfer_fee_rate: 0.00001,
+    slippage_rate: parseFloat(els.inputSlippage.value) || 0.0005,
+    enable_t_plus_one: els.checkT1.checked,
+    enforce_price_limits: els.checkLimits.checked,
+    benchmark_symbol: '000300'
+  };
+
+  try {
+    const res = await fetch('/api/backtest/optimize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const resData = await res.json();
+    if (res.ok && resData.code === 200) {
+      state.optimizationResult = resData.data;
+
+      // 1. 自动切换到“参数敏感性热力图” Tab
+      document.querySelectorAll('.chart-tab').forEach(t => t.classList.remove('active'));
+      els.tabOptHeatmap.classList.add('active');
+      state.activeChartTab = 'heatmap';
+      renderActiveChart();
+
+      // 2. 自动切换到底部“参数寻优榜单” Tab
+      document.querySelectorAll('.details-tab').forEach(t => t.classList.remove('active'));
+      els.tabPaneOpt.classList.add('active');
+      document.querySelectorAll('.details-pane').forEach(p => p.classList.remove('active'));
+      document.getElementById('pane-opt').classList.add('active');
+
+      // 3. 渲染寻优榜单表格
+      renderOptimizationTable(resData.data.ranked_results || [], targetMetric);
+    } else {
+      alert(`网格寻优失败: ${resData.detail || '未知错误'}`);
+    }
+  } catch (err) {
+    console.error('寻优请求异常:', err);
+    alert('网格寻优服务异常');
+  } finally {
+    els.optimizeBtn.classList.remove('loading');
+    els.optimizeBtn.disabled = false;
+  }
+}
+
+// 6. 绘制参数敏感性 2D 热力图
+function renderOptimizationHeatmap() {
+  if (!state.optimizationResult || !state.optimizationResult.heatmap_2d) {
+    state.chartInstance.setOption({
+      title: {
+        text: '当前参数寻优无2D热力图数据，请先点击【⚡ 启动参数网格寻优】',
+        left: 'center',
+        top: 'middle',
+        textStyle: { color: '#64748b', fontSize: 13 }
+      }
+    });
+    return;
+  }
+
+  const h = state.optimizationResult.heatmap_2d;
+  const xLabels = h.x_labels;
+  const yLabels = h.y_labels;
+  const data = h.points; // [[x, y, val], ...]
+
+  const validVals = data.map(p => p[2]).filter(v => v !== null && !isNaN(v));
+  const minVal = validVals.length > 0 ? Math.min(...validVals) : 0;
+  const maxVal = validVals.length > 0 ? Math.max(...validVals) : 1;
+
+  const metricNameMap = {
+    'sharpe_ratio': '夏普比率',
+    'total_return': '累计收益率(%)',
+    'calmar_ratio': '卡玛比率',
+    'win_rate': '胜率(%)'
+  };
+  const metricLabel = metricNameMap[h.target_metric] || h.target_metric;
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      position: 'top',
+      backgroundColor: 'rgba(17, 22, 34, 0.95)',
+      borderColor: 'rgba(255, 255, 255, 0.1)',
+      textStyle: { color: '#f8fafc', fontSize: 12 },
+      formatter: function (p) {
+        const xVal = xLabels[p.value[0]];
+        const yVal = yLabels[p.value[1]];
+        const score = p.value[2] !== null ? p.value[2] : '无效';
+        return `<div>${h.param_x}: <b>${xVal}</b></div><div>${h.param_y}: <b>${yVal}</b></div><div>${metricLabel}: <b style="color:#38bdf8;">${score}</b></div>`;
+      }
+    },
+    grid: {
+      left: '8%',
+      right: '12%',
+      top: '12%',
+      bottom: '15%',
+      containLabel: true
+    },
+    xAxis: {
+      type: 'category',
+      data: xLabels,
+      name: h.param_x,
+      nameLocation: 'middle',
+      nameGap: 28,
+      nameTextStyle: { color: '#94a3b8', fontSize: 12 },
+      splitArea: { show: true, areaStyle: { color: ['rgba(255,255,255,0.01)', 'rgba(255,255,255,0.03)'] } },
+      axisLabel: { color: '#94a3b8' },
+      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } }
+    },
+    yAxis: {
+      type: 'category',
+      data: yLabels,
+      name: h.param_y,
+      nameLocation: 'middle',
+      nameGap: 36,
+      nameTextStyle: { color: '#94a3b8', fontSize: 12 },
+      splitArea: { show: true, areaStyle: { color: ['rgba(255,255,255,0.01)', 'rgba(255,255,255,0.03)'] } },
+      axisLabel: { color: '#94a3b8' },
+      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } }
+    },
+    visualMap: {
+      min: minVal,
+      max: maxVal,
+      calculable: true,
+      orient: 'vertical',
+      right: '1%',
+      top: 'middle',
+      inRange: {
+        color: ['#0f172a', '#1e3a8a', '#0284c7', '#10b981', '#f59e0b', '#ef4444']
+      },
+      textStyle: { color: '#94a3b8', fontSize: 11 },
+      formatter: function (v) { return v.toFixed(1); }
+    },
+    series: [
+      {
+        name: metricLabel,
+        type: 'heatmap',
+        data: data,
+        label: {
+          show: true,
+          color: '#ffffff',
+          fontSize: 11,
+          formatter: function (p) {
+            return p.value[2] !== null ? p.value[2] : '-';
+          }
+        },
+        emphasis: {
+          itemStyle: {
+            shadowBlur: 10,
+            shadowColor: 'rgba(0, 0, 0, 0.5)'
+          }
+        }
+      }
+    ]
+  };
+
+  state.chartInstance.setOption(option);
+}
+
+// 7. 渲染寻优榜单表格
+function renderOptimizationTable(rankedList, targetMetric) {
+  if (!rankedList || rankedList.length === 0) {
+    els.optTableBody.innerHTML = `<tr><td colspan="10" class="empty-cell">未找到有效的寻优结果</td></tr>`;
+    return;
+  }
+
+  els.optTableBody.innerHTML = '';
+  rankedList.forEach((item, idx) => {
+    const tr = document.createElement('tr');
+
+    // 格式化参数文本
+    const paramStr = Object.entries(item.params).map(([k, v]) => `${k}=${v}`).join(', ');
+    const isTop1 = idx === 0;
+
+    tr.innerHTML = `
+      <td><span style="font-weight:${isTop1 ? '700' : '500'};color:${isTop1 ? '#fbbf24' : 'inherit'};">#${idx + 1}</span></td>
+      <td style="font-family:var(--font-mono);color:#a5b4fc;">${paramStr}</td>
+      <td style="font-weight:600;color:var(--cyan);">${item.target_metric_value.toFixed(2)}</td>
+      <td class="${item.total_return >= 0 ? 'text-green' : 'text-red'}">${item.total_return > 0 ? '+' : ''}${item.total_return.toFixed(2)}%</td>
+      <td class="${item.annualized_return >= 0 ? 'text-green' : 'text-red'}">${item.annualized_return > 0 ? '+' : ''}${item.annualized_return.toFixed(2)}%</td>
+      <td>${item.sharpe_ratio.toFixed(2)}</td>
+      <td class="text-red">${item.max_drawdown.toFixed(2)}%</td>
+      <td>${item.win_rate.toFixed(1)}%</td>
+      <td>${item.total_trades}</td>
+      <td><button class="opt-apply-btn" data-params='${JSON.stringify(item.params)}'>应用</button></td>
+    `;
+    els.optTableBody.appendChild(tr);
+  });
+
+  // 绑定“应用此参数”事件
+  els.optTableBody.querySelectorAll('.opt-apply-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const p = JSON.parse(btn.dataset.params);
+      applyOptimizedParams(p);
+    });
+  });
+}
+
+// 8. 将寻优结果参数一键回填至左侧表单并触发回测
+function applyOptimizedParams(params) {
+  Object.entries(params).forEach(([key, val]) => {
+    const input = els.paramsContainer.querySelector(`.dynamic-param-input[data-key="${key}"]`);
+    if (input) {
+      input.value = val;
+      const labelVal = document.getElementById(`val-${key}`);
+      if (labelVal) labelVal.textContent = val;
+    }
+  });
+
+  // 切回净值曲线 Tab
+  document.querySelectorAll('.chart-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector('.chart-tab[data-tab="equity"]').classList.add('active');
+  state.activeChartTab = 'equity';
+
+  // 立即触发一次回测
+  triggerBacktest();
 }
 
 // 渲染交易明细表格

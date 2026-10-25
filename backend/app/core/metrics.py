@@ -133,6 +133,9 @@ class MetricsCalculator:
                 "value": round(row["drawdown"] * 100, 2)  # 百分比负值
             })
 
+        # 11. 月度收益热力矩阵计算
+        monthly_returns = self._calculate_monthly_returns(df)
+
         return {
             "total_return": round(float(total_return) * 100, 2),                  # %
             "annualized_return": round(float(annualized_return) * 100, 2),        # %
@@ -154,5 +157,42 @@ class MetricsCalculator:
             "trading_days": trading_days,
             "equity_curve": equity_curve,
             "benchmark_curve": benchmark_curve,
-            "drawdown_curve": drawdown_curve
+            "drawdown_curve": drawdown_curve,
+            "monthly_returns": monthly_returns
+        }
+
+    def _calculate_monthly_returns(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """计算月度与年度收益率矩阵 (用于热力图展示)"""
+        if df.empty or "daily_return" not in df.columns:
+            return {"years": [], "months": list(range(1, 13)), "data": {}}
+
+        work_df = df.copy()
+        work_df["dt"] = pd.to_datetime(work_df["date"])
+        work_df["year"] = work_df["dt"].dt.year
+        work_df["month"] = work_df["dt"].dt.month
+
+        years = sorted(work_df["year"].unique().tolist())
+        matrix_data = {}
+
+        for y in years:
+            y_df = work_df[work_df["year"] == y]
+            matrix_data[str(y)] = {}
+
+            # 计算各月份收益
+            for m in range(1, 13):
+                m_df = y_df[y_df["month"] == m]
+                if not m_df.empty:
+                    m_ret = float(np.prod(1.0 + m_df["daily_return"].values) - 1.0)
+                    matrix_data[str(y)][str(m)] = round(m_ret * 100, 2)
+                else:
+                    matrix_data[str(y)][str(m)] = None
+
+            # 计算全年累计收益
+            y_ret = float(np.prod(1.0 + y_df["daily_return"].values) - 1.0)
+            matrix_data[str(y)]["total"] = round(y_ret * 100, 2)
+
+        return {
+            "years": [str(y) for y in years],
+            "months": list(range(1, 13)),
+            "data": matrix_data
         }

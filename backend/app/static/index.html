@@ -157,11 +157,29 @@
             </div>
           </div>
 
-          <!-- 提交按钮 -->
-          <button type="submit" id="run-btn" class="run-button">
-            <span class="btn-spinner"></span>
-            <span class="btn-text">运行量化回测</span>
-          </button>
+          <!-- 提交与网格寻优按钮组 -->
+          <div class="action-buttons-group">
+            <button type="submit" id="run-btn" class="run-button">
+              <span class="btn-spinner"></span>
+              <span class="btn-text">运行量化回测</span>
+            </button>
+
+            <div class="optimizer-box">
+              <div class="opt-header-row">
+                <label for="select-target-metric">寻优目标</label>
+                <select id="select-target-metric" class="form-control opt-select">
+                  <option value="sharpe_ratio">最高夏普 (Sharpe)</option>
+                  <option value="total_return">最高累计收益 (Return)</option>
+                  <option value="calmar_ratio">最高卡玛比率 (Calmar)</option>
+                  <option value="win_rate">最高胜率 (Win Rate)</option>
+                </select>
+              </div>
+              <button type="button" id="optimize-btn" class="optimize-button">
+                <span class="btn-spinner"></span>
+                <span class="btn-text">⚡ 启动参数网格寻优</span>
+              </button>
+            </div>
+          </div>
         </form>
       </aside>
 
@@ -268,15 +286,35 @@
               <button class="chart-tab active" data-tab="equity">净值曲线对比</button>
               <button class="chart-tab" data-tab="kline">标的K线与买卖点</button>
               <button class="chart-tab" data-tab="drawdown">水下动态回撤</button>
+              <button class="chart-tab" data-tab="monthly">月度收益热力表</button>
+              <button class="chart-tab" data-tab="heatmap" id="tab-opt-heatmap">参数敏感性热力图</button>
             </div>
-            <div class="chart-tools">
+            <div class="chart-tools" id="chart-legend-box">
               <span class="chart-legend-item"><span class="legend-color equity-color"></span>策略净值</span>
               <span class="chart-legend-item"><span class="legend-color bmk-color"></span>沪深300</span>
             </div>
           </div>
 
           <div class="chart-wrapper">
+            <!-- ECharts 主容器 -->
             <div id="main-chart" style="width: 100%; height: 380px;"></div>
+
+            <!-- 月度收益矩阵 DOM 容器 (切换到 monthly tab 时展示) -->
+            <div id="monthly-matrix-container" class="matrix-wrapper" style="display: none;">
+              <table class="matrix-table" id="matrix-table">
+                <thead>
+                  <tr>
+                    <th>年份</th>
+                    <th>1月</th><th>2月</th><th>3月</th><th>4月</th><th>5月</th><th>6月</th>
+                    <th>7月</th><th>8月</th><th>9月</th><th>10月</th><th>11月</th><th>12月</th>
+                    <th class="col-total">全年累计</th>
+                  </tr>
+                </thead>
+                <tbody id="matrix-tbody">
+                  <!-- 动态填充 -->
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 
@@ -286,6 +324,7 @@
             <div class="details-tabs">
               <button class="details-tab active" data-pane="trades">成交记录明细 (<span id="trades-count">0</span>)</button>
               <button class="details-tab" data-pane="logs">回测引擎日志</button>
+              <button class="details-tab" data-pane="opt" id="tab-pane-opt">参数寻优榜单 (Top 20)</button>
             </div>
           </div>
 
@@ -320,6 +359,33 @@
           <div class="details-pane" id="pane-logs">
             <div class="logs-console" id="logs-container">
               <div class="log-line info">等待回测启动...</div>
+            </div>
+          </div>
+
+          <!-- 参数寻优榜单 -->
+          <div class="details-pane" id="pane-opt">
+            <div class="table-wrapper">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>排名</th>
+                    <th>参数组合</th>
+                    <th>目标指标值</th>
+                    <th>累计收益率</th>
+                    <th>年化收益率</th>
+                    <th>夏普比率</th>
+                    <th>最大回撤</th>
+                    <th>胜率</th>
+                    <th>成交笔数</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="opt-table-body">
+                  <tr>
+                    <td colspan="10" class="empty-cell">请点击左侧【⚡ 启动参数网格寻优】生成最优参数排名</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

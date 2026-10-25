@@ -83,6 +83,7 @@ body {
   letter-spacing: -0.02em;
   background: linear-gradient(135deg, #f8fafc 30%, #94a3b8 100%);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
@@ -795,4 +796,142 @@ body {
   .metrics-grid {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+
+/* 操作按键组与寻优组件 */
+.action-buttons-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.optimizer-box {
+  background: rgba(99, 102, 241, 0.05);
+  border: 1px dashed rgba(99, 102, 241, 0.35);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.opt-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.opt-header-row label {
+  font-size: 0.75rem;
+  color: #a5b4fc;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.opt-select {
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  background-color: var(--bg-card);
+  border-color: rgba(99, 102, 241, 0.3);
+  color: var(--text-main);
+  border-radius: 4px;
+}
+
+.optimize-button {
+  background: linear-gradient(135deg, #0284c7, #0d9488);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 9px 14px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.25);
+  transition: all 0.25s ease;
+}
+
+.optimize-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(13, 148, 136, 0.4);
+}
+
+.optimize-button.loading .btn-spinner {
+  display: inline-block;
+}
+
+/* 月度收益热力表 */
+.matrix-wrapper {
+  overflow-x: auto;
+  max-height: 380px;
+  padding: 10px 4px;
+}
+
+.matrix-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.matrix-table th {
+  background-color: var(--bg-card);
+  color: var(--text-muted);
+  font-weight: 600;
+  padding: 9px 6px;
+  border: 1px solid var(--border-subtle);
+  font-size: 0.74rem;
+}
+
+.matrix-table td {
+  padding: 9px 6px;
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  transition: all 0.2s;
+}
+
+.matrix-table tr:hover td {
+  filter: brightness(1.2);
+}
+
+.matrix-year-cell {
+  background-color: var(--bg-card);
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.cell-pos {
+  color: #ef4444; /* 阳线红 */
+}
+
+.cell-neg {
+  color: #10b981; /* 阴线绿 */
+}
+
+.matrix-total-cell {
+  font-weight: 700;
+  border-left: 2px solid rgba(255, 255, 255, 0.15) !important;
+}
+
+/* 寻优排行榜应用按钮 */
+.opt-apply-btn {
+  background-color: rgba(99, 102, 241, 0.2);
+  border: 1px solid var(--primary);
+  color: #c7d2fe;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.opt-apply-btn:hover {
+  background-color: var(--primary);
+  color: #fff;
 }
