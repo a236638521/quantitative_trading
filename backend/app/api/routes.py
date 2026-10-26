@@ -1,3 +1,4 @@
+import time
 from typing import Dict, Any, Optional, List
 import logging
 from fastapi import APIRouter, HTTPException
@@ -8,6 +9,7 @@ from ..core.engine import BacktestEngine
 from ..core.portfolio_engine import PortfolioBacktestEngine
 from ..core.optimizer import GridSearchOptimizer
 from ..core.sandbox import StrategySandbox, SAMPLE_TEMPLATES
+from ..core.watchdog import SignalWatchdog, WebhookNotifier
 from ..factors.analysis import FactorAnalyzer, AVAILABLE_FACTORS
 from ..data.provider import MarketDataProvider, normalize_symbol
 from ..strategies.dual_ma import DualMAStrategy
@@ -188,6 +190,34 @@ class FactorAnalyzeRequest(BaseModel):
     end_date: str = Field(default="2024-01-01", description="结束日期")
     forward_period: int = Field(default=5, description="未来收益预测周期 (日)")
     quantiles: int = Field(default=5, description="分层组数")
+
+
+class FactorCorrelationRequest(BaseModel):
+    symbols: List[str] = Field(default_factory=lambda: ["510300", "510500", "513100", "518880", "511010"], description="股票/ETF标的池")
+    start_date: str = Field(default="2023-01-01", description="开始日期")
+    end_date: str = Field(default="2024-01-01", description="结束日期")
+    factor_names: Optional[List[str]] = Field(default=None, description="参与分析的因子标识列表")
+
+
+class WatchdogConfigUpdateRequest(BaseModel):
+    webhook_platform: str = Field(default="feishu", description="平台: feishu / dingtalk / wecom")
+    webhook_url: str = Field(default="", description="机器人 Webhook 地址")
+    webhook_secret: Optional[str] = Field(default="", description="加签密钥 (钉钉可选)")
+    auto_alert_enabled: bool = Field(default=False, description="是否开启自动预警")
+    monitored_tasks: Optional[List[Dict[str, Any]]] = Field(default=None, description="监控任务列表")
+
+
+class WatchdogTestAlertRequest(BaseModel):
+    webhook_platform: str = Field(default="feishu")
+    webhook_url: str = Field(...)
+    webhook_secret: Optional[str] = Field(default="")
+
+
+class WatchdogSendSignalRequest(BaseModel):
+    signal: Dict[str, Any] = Field(...)
+    webhook_platform: Optional[str] = Field(default=None)
+    webhook_url: Optional[str] = Field(default=None)
+    webhook_secret: Optional[str] = Field(default=None)
 
 
 @router.get("/health")
@@ -495,4 +525,136 @@ def run_factor_analysis(req: FactorAnalyzeRequest):
     except Exception as e:
         logger.exception("因子投研分析异常")
         raise HTTPException(status_code=500, detail=f"因子投研分析异常: {str(e)}")
+
+
+@router.post("/factors/correlation")
+def run_factor_correlation(req: FactorCorrelationRequest):
+    """计算多因子之间的截面 Rank 相关性矩阵与共线性诊断"""
+    if not req.symbols or len(req.symbols) < 2:
+        raise HTTPException(status_code=400, detail="多因子相关性分析至少需要提供 2 只标的")
+
+    data_dict = data_provider.fetch_multi_daily_bars(
+        symbols=req.symbols,
+        start_date=req.start_date,
+        end_date=req.end_date,
+        adjust="qfq"
+    )
+    if not data_dict or len(data_dict) < 2:
+        raise HTTPException(status_code=400, detail="标的池数据不足以开展多因子相关性分析")
+
+    bmk_df = data_provider.fetch_benchmark_bars(
+        benchmark_symbol="000300",
+        start_date=req.start_date,
+        end_date=req.end_date
+    )
+    trading_dates, aligned_dict = data_provider.align_multi_bars(data_dict, bmk_df)
+
+    try:
+        matrix_result = FactorAnalyzer.compute_correlation_matrix(
+            data_dict=aligned_dict,
+            trading_dates=trading_dates,
+            factor_ids=req.factor_names
+        )
+        return {"code": 200, "message": "多因子相关性矩阵计算完成", "data": matrix_result}
+    except Exception as e:
+        logger.exception("多因子相关性计算异常")
+        raise HTTPException(status_code=500, detail=f"多因子相关性计算异常: {str(e)}")
+
+
+@router.get("/watchdog/config")
+def get_watchdog_config():
+    """获取实盘模拟盯盘配置"""
+    wd = SignalWatchdog()
+    return {"code": 200, "data": wd.load_config()}
+
+
+@router.post("/watchdog/config")
+def update_watchdog_config(req: WatchdogConfigUpdateRequest):
+    """更新实盘模拟盯盘配置"""
+    wd = SignalWatchdog()
+    curr_cfg = wd.load_config()
+    curr_cfg["webhook_platform"] = req.webhook_platform
+    curr_cfg["webhook_url"] = req.webhook_url
+    curr_cfg["webhook_secret"] = req.webhook_secret or ""
+    curr_cfg["auto_alert_enabled"] = req.auto_alert_enabled
+    if req.monitored_tasks is not None:
+        curr_cfg["monitored_tasks"] = req.monitored_tasks
+    wd.save_config(curr_cfg)
+    return {"code": 200, "message": "盯盘配置更新成功", "data": curr_cfg}
+
+
+@router.post("/watchdog/scan")
+def scan_watchdog_signals():
+    """全量扫描监控策略，侦测最新交易日实时产生的操作信号"""
+    wd = SignalWatchdog()
+    signals = wd.scan_live_signals()
+    return {
+        "code": 200,
+        "message": f"扫描完成，侦测到 {len(signals)} 条最新交易信号",
+        "data": {
+            "signals": signals,
+            "scan_time": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+    }
+
+
+@router.post("/watchdog/test-webhook")
+def test_webhook_connection(req: WatchdogTestAlertRequest):
+    """向指定机器人 Webhook 发送测试卡片"""
+    test_title = "AlphaQuant 机器人连通性测试"
+    test_content = (
+        f"**恭喜！机器人 Webhook 配置成功**\n"
+        f"- **目标平台**: {req.webhook_platform.upper()}\n"
+        f"- **测试时间**: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"- **状态**: 正常在线，已接入实时量化信号盯盘通道！"
+    )
+    result = WebhookNotifier.send_notification(
+        platform=req.webhook_platform,
+        webhook_url=req.webhook_url,
+        secret=req.webhook_secret,
+        title=test_title,
+        content_markdown=test_content,
+        action_type="BUY"
+    )
+    if not result.get("success", False):
+        raise HTTPException(status_code=400, detail=result.get("message", "推送失败"))
+    return {"code": 200, "message": "测试卡片推送成功", "data": result}
+
+
+@router.post("/watchdog/send-signal")
+def send_signal_alert(req: WatchdogSendSignalRequest):
+    """推送指定的实时信号到机器人 Webhook"""
+    wd = SignalWatchdog()
+    cfg = wd.load_config()
+    platform = req.webhook_platform or cfg.get("webhook_platform", "feishu")
+    webhook_url = req.webhook_url or cfg.get("webhook_url", "")
+    secret = req.webhook_secret or cfg.get("webhook_secret", "")
+
+    if not webhook_url:
+        raise HTTPException(status_code=400, detail="未配置机器人 Webhook 地址")
+
+    sig = req.signal
+    action_label = "【买入建仓】" if sig.get("action") == "BUY" else ("【卖出平仓】" if sig.get("action") == "SELL" else "【动态调仓】")
+    title = f"{sig.get('strategy_label')} - {action_label} {sig.get('symbol')}"
+    content = (
+        f"**策略**: {sig.get('strategy_label')}\n"
+        f"**标的**: {sig.get('symbol')} ({sig.get('symbol_name', '')})\n"
+        f"**操作**: **{sig.get('action')}**\n"
+        f"**参考价格**: ¥{sig.get('price')}\n"
+        f"**触发理由**: {sig.get('reason')}\n"
+        f"**信号日期**: {sig.get('date')}"
+    )
+
+    result = WebhookNotifier.send_notification(
+        platform=platform,
+        webhook_url=webhook_url,
+        secret=secret,
+        title=title,
+        content_markdown=content,
+        action_type=sig.get("action", "BUY")
+    )
+    if not result.get("success", False):
+        raise HTTPException(status_code=400, detail=result.get("message", "推送失败"))
+    return {"code": 200, "message": "预警卡片推送成功", "data": result}
+
 

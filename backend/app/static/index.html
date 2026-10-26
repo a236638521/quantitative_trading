@@ -67,6 +67,10 @@
         <span class="mode-icon">📊</span>
         <span>可视化因子投研中心</span>
       </button>
+      <button class="nav-mode-btn" data-target="view-watchdog">
+        <span class="mode-icon">🔔</span>
+        <span>实盘模拟盯盘 & 信号预警</span>
+      </button>
     </nav>
 
     <!-- 模块 1: 经典策略与多资产回测 -->
@@ -753,15 +757,27 @@
             <button class="chart-tab active" data-factab="nav">5组分层回测累计净值 (Q1~Q5 & 多空对冲)</button>
             <button class="chart-tab" data-factab="ic">Rank-IC 逐日时序柱状图与累计 IC 趋势</button>
             <button class="chart-tab" data-factab="group_bar">各分组年化收益与夏普比率梯队对比</button>
+            <button class="chart-tab" data-factab="heatmap">🔥 多因子相互相关性热力矩阵</button>
           </div>
         </div>
         <div class="chart-wrapper">
           <div id="factor-main-chart" style="width: 100%; height: 420px;"></div>
+          <!-- 多因子共线性与互补性智能诊断卡片 (切换到热力图时展示) -->
+          <div id="factor-corr-diagnosis" class="corr-diagnosis-panel" style="display: none;">
+            <div class="diagnosis-block warn-block">
+              <div class="diag-header"><span class="diag-icon">⚠️</span><span>高度共线冗余因子组合 (相关系数 |r| ≥ 0.65，建议去重精简)</span></div>
+              <ul id="diag-redundant-list" class="diag-list"></ul>
+            </div>
+            <div class="diagnosis-block good-block">
+              <div class="diag-header"><span class="diag-icon">⭐</span><span>低相关互补黄金组合 (相关系数 |r| ≤ 0.15，极佳多因子搭配)</span></div>
+              <ul id="diag-orthogonal-list" class="diag-list"></ul>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- 分层绩效统计表 -->
-      <div class="details-section card-box">
+      <div class="details-section card-box" id="factor-group-section">
         <div class="details-header">
           <div class="details-tabs">
             <button class="details-tab active">分层梯队回测绩效统计明细表</button>
@@ -788,6 +804,133 @@
       </div>
     </div>
   </div><!-- /view-factors -->
+
+  <!-- 模块 4: 实盘模拟盯盘与机器人信号预警推送 -->
+  <div id="view-watchdog" class="app-view" style="display: none;">
+    <div class="watchdog-container">
+      <!-- 顶部配置与状态两栏布局 -->
+      <div class="watchdog-top-grid">
+        <!-- 左卡片: 机器人 Webhook 预警通道配置 -->
+        <div class="card-box watchdog-config-card">
+          <div class="card-header-row">
+            <h4>🤖 预警机器人通道配置 (飞书 / 钉钉 / 企业微信)</h4>
+            <span class="badge-tag">消息推送</span>
+          </div>
+
+          <div class="watchdog-form">
+            <div class="form-row-2col">
+              <div class="input-group">
+                <label>目标推送平台</label>
+                <select id="wd-platform-select" class="form-control">
+                  <option value="feishu">飞书 (Lark) 机器人</option>
+                  <option value="dingtalk">钉钉 (DingTalk) 机器人</option>
+                  <option value="wecom">企业微信 (WeCom) 机器人</option>
+                </select>
+              </div>
+              <div class="input-group">
+                <label>加签安全密钥 (钉钉可选)</label>
+                <input type="password" id="wd-secret-input" class="form-control" placeholder="SEC... 密钥 (飞书/企微可留空)">
+              </div>
+            </div>
+
+            <div class="input-group">
+              <label>机器人 Webhook 地址 (URL)</label>
+              <input type="text" id="wd-url-input" class="form-control" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/... 或 https://oapi.dingtalk.com/robot/send?...">
+            </div>
+
+            <div class="watchdog-switch-row">
+              <label class="switch-item">
+                <input type="checkbox" id="wd-auto-alert-check">
+                <span class="switch-text">侦测到新信号时自动推送告警到群机器人</span>
+              </label>
+              <div class="btn-group-right">
+                <button type="button" id="wd-save-config-btn" class="chip-btn">💾 保存配置</button>
+                <button type="button" id="wd-test-webhook-btn" class="chip-btn primary">📡 测试 Webhook 连通性</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右卡片: 实时盯盘控制与扫描引擎 -->
+        <div class="card-box watchdog-status-card">
+          <div class="card-header-row">
+            <h4>⚡ 盘中策略信号侦测引擎</h4>
+            <span id="wd-scan-time-badge" class="badge status-live">最后扫描: 尚未执行</span>
+          </div>
+
+          <div class="watchdog-status-body">
+            <div class="watchdog-kpis">
+              <div class="kpi-mini">
+                <span class="kpi-label">监控策略数</span>
+                <span class="kpi-val" id="wd-kpi-tasks">4</span>
+              </div>
+              <div class="kpi-mini">
+                <span class="kpi-label">今日有效信号</span>
+                <span class="kpi-val highlight" id="wd-kpi-signals">0</span>
+              </div>
+              <div class="kpi-mini">
+                <span class="kpi-label">推送通道</span>
+                <span class="kpi-val" id="wd-kpi-platform">飞书</span>
+              </div>
+            </div>
+
+            <p class="watchdog-hint">
+              根据最新日线与实时指标，一键扫描所有已启用策略的最新买卖信号（金叉/死叉/突破/动量轮动换仓）。
+            </p>
+
+            <button type="button" id="wd-scan-btn" class="run-button watchdog-scan-btn">
+              <span class="btn-spinner"></span>
+              <span class="btn-text">⚡ 立即执行盘中全量扫描 (Scan Signals)</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 实时信号警报卡片流 -->
+      <div class="signals-section card-box">
+        <div class="signals-header">
+          <div class="header-left">
+            <h3>🚨 实时交易信号预警流 (<span id="wd-signals-count">0</span>)</h3>
+            <span class="section-sub">策略最新触发的操作指示</span>
+          </div>
+          <span class="pulse-indicator"><span class="pulse-dot"></span> 实时就绪</span>
+        </div>
+
+        <div id="wd-signals-container" class="signals-grid">
+          <div class="empty-signals-box">
+            <span class="empty-icon">🔔</span>
+            <p>暂无触发信号，请点击上方【⚡ 立即执行盘中全量扫描】</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 监控策略任务列表 -->
+      <div class="details-section card-box">
+        <div class="details-header">
+          <div class="details-tabs">
+            <button class="details-tab active">已启用的盯盘策略任务清单</button>
+          </div>
+        </div>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>任务标识</th>
+                <th>策略名称</th>
+                <th>监控标的/资产池</th>
+                <th>核心参数配置</th>
+                <th>监控状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="wd-tasks-table-body">
+              <!-- 动态填充 -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div><!-- /view-watchdog -->
 
   <script src="app.js"></script>
 </body>

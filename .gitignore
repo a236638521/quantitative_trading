@@ -40,6 +40,9 @@ Thumbs.db
 .env
 tools/
 *.exe
+
+# 公网穿透
 tunnel_url.txt
 启动公网穿透服务.bat
+run_cloudflared.py
 

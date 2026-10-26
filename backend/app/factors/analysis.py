@@ -312,3 +312,98 @@ class FactorAnalyzer:
             "long_short_nav": long_short_nav,
             "group_stats": group_stats
         }
+
+    @classmethod
+    def compute_correlation_matrix(
+        cls,
+        data_dict: Dict[str, pd.DataFrame],
+        trading_dates: List[str],
+        factor_ids: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        计算多因子之间的截面 Rank 相关性矩阵与共线性诊断
+        """
+        if not factor_ids:
+            factor_ids = [f["id"] for f in AVAILABLE_FACTORS]
+
+        factor_meta_map = {f["id"]: f["name"] for f in AVAILABLE_FACTORS}
+        valid_factor_ids = [fid for fid in factor_ids if fid in factor_meta_map]
+        factor_labels = [factor_meta_map[fid] for fid in valid_factor_ids]
+
+        symbols = list(data_dict.keys())
+        if len(symbols) < 2:
+            raise ValueError("多因子相关性分析至少需要 2 只标的")
+
+        # 1. 预先计算每只标的、每个因子的完整时间序列面板
+        factor_panels: Dict[str, pd.DataFrame] = {}
+        for fid in valid_factor_ids:
+            panel = pd.DataFrame(index=trading_dates, columns=symbols, dtype=float)
+            for sym in symbols:
+                df = data_dict[sym]
+                f_series = cls.compute_single_factor(fid, df)
+                df_indexed = pd.Series(f_series.values, index=df["date"])
+                common_dates = [d for d in trading_dates if d in df_indexed.index]
+                panel.loc[common_dates, sym] = df_indexed.loc[common_dates]
+            factor_panels[fid] = panel.ffill().bfill()
+
+        # 2. 计算因子两两之间的平均截面秩相关系数 (Spearman Rank Correlation)
+        n = len(valid_factor_ids)
+        matrix = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+        heatmap_data = []
+
+        redundant_pairs = []   # 高度相关 (|r| >= 0.65)
+        orthogonal_pairs = []  # 低相关互补 (|r| <= 0.15)
+
+        # 对每个因子矩阵按截面预排序 (rank across axis=1)，实现极速向量化 Spearman 秩相关
+        ranked_panels = {fid: factor_panels[fid].rank(axis=1) for fid in valid_factor_ids}
+
+        for i in range(n):
+            fid_i = valid_factor_ids[i]
+            ranked_i = ranked_panels[fid_i]
+
+            for j in range(i, n):
+                fid_j = valid_factor_ids[j]
+                ranked_j = ranked_panels[fid_j]
+
+                if i == j:
+                    corr_val = 1.0
+                else:
+                    # 向量化逐日截面秩相关 (Spearman Rank Correlation)
+                    daily_corr_series = ranked_i.corrwith(ranked_j, axis=1)
+                    valid_daily = daily_corr_series.dropna()
+                    if not valid_daily.empty:
+                        corr_val = round(float(valid_daily.mean()), 3)
+                    else:
+                        flat_corr = factor_panels[fid_i].stack().corr(factor_panels[fid_j].stack(), method="spearman")
+                        corr_val = round(float(flat_corr) if not np.isnan(flat_corr) else 0.0, 3)
+
+                matrix[i][j] = corr_val
+                matrix[j][i] = corr_val
+
+                if i != j:
+                    pair_info = {
+                        "factor1": factor_labels[i],
+                        "factor2": factor_labels[j],
+                        "correlation": corr_val
+                    }
+                    if abs(corr_val) >= 0.65:
+                        redundant_pairs.append(pair_info)
+                    elif abs(corr_val) <= 0.15:
+                        orthogonal_pairs.append(pair_info)
+
+        # 构造 ECharts 2D 热力图数据: [x, y, value]
+        for y_idx in range(n):
+            for x_idx in range(n):
+                heatmap_data.append([x_idx, y_idx, matrix[y_idx][x_idx]])
+
+        return {
+            "factor_ids": valid_factor_ids,
+            "factor_labels": factor_labels,
+            "matrix": matrix,
+            "heatmap_data": heatmap_data,
+            "redundant_pairs": redundant_pairs,
+            "orthogonal_pairs": orthogonal_pairs,
+            "symbols_count": len(symbols),
+            "trading_days": len(trading_dates)
+        }
+

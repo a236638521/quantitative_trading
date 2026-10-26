@@ -77,6 +77,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initViewSwitcher();
   initSandbox();
   initFactorResearch();
+  initWatchdog();
   await loadStrategies();
   // 首次进入自动跑一次默认回测展示给用户
   triggerBacktest();
@@ -1118,6 +1119,10 @@ function initViewSwitcher() {
           sandboxState.chart.resize();
         } else if (targetId === 'view-factors' && factorState.chart) {
           factorState.chart.resize();
+        } else if (targetId === 'view-watchdog') {
+          if (!watchdogState.hasScanned) {
+            triggerWatchdogScan();
+          }
         }
       }, 50);
     });
@@ -1484,6 +1489,8 @@ function renderSandboxTrades(trades) {
 const factorState = {
   factors: [],
   currentResult: null,
+  corrResult: null,
+  corrSymbols: null,
   activeTab: 'nav',
   chart: null
 };
@@ -1553,8 +1560,19 @@ function initFactorResearch() {
       const poolKey = btn.dataset.fpool;
       if (poolShortcuts[poolKey]) {
         symbolsInput.value = poolShortcuts[poolKey];
+        factorState.corrResult = null;
+        if (factorState.activeTab === 'heatmap') {
+          loadAndRenderFactorCorrelation(true);
+        }
       }
     });
+  });
+
+  symbolsInput && symbolsInput.addEventListener('change', () => {
+    factorState.corrResult = null;
+    if (factorState.activeTab === 'heatmap') {
+      loadAndRenderFactorCorrelation(true);
+    }
   });
 
   // 3. 图表 Tab 切换
@@ -1658,7 +1676,22 @@ function renderFactorDashboard(data) {
 }
 
 function renderFactorChart() {
-  if (!factorState.chart || !factorState.currentResult) return;
+  if (!factorState.chart) return;
+
+  const corrDiagEl = document.getElementById('factor-corr-diagnosis');
+  const groupSectionEl = document.getElementById('factor-group-section');
+
+  if (factorState.activeTab === 'heatmap') {
+    if (corrDiagEl) corrDiagEl.style.display = 'grid';
+    if (groupSectionEl) groupSectionEl.style.display = 'none';
+    loadAndRenderFactorCorrelation();
+    return;
+  } else {
+    if (corrDiagEl) corrDiagEl.style.display = 'none';
+    if (groupSectionEl) groupSectionEl.style.display = 'block';
+  }
+
+  if (!factorState.currentResult) return;
   const data = factorState.currentResult;
 
   if (factorState.activeTab === 'nav') {
@@ -1862,6 +1895,171 @@ function renderFactorChart() {
   }
 }
 
+// 异步加载并渲染多因子相关性热力图与诊断
+async function loadAndRenderFactorCorrelation(forceRefresh = false) {
+  const symbolsInput = document.getElementById('factor-symbols-input');
+  const rawSymbols = symbolsInput ? symbolsInput.value.replace(/;/g, ',').replace(/\s+/g, ',').split(',') : [];
+  const symbols = rawSymbols.map(s => s.trim()).filter(s => s.length > 0);
+  const poolSymbols = symbols.length >= 2 ? symbols : ['510300', '510500', '513100', '518880', '511010'];
+
+  if (!forceRefresh && factorState.corrResult && factorState.corrSymbols === poolSymbols.join(',')) {
+    renderCorrelationHeatmap(factorState.corrResult);
+    return;
+  }
+
+  factorState.chart.showLoading({
+    text: '正在全截面提取7大因子数据并计算秩相关矩阵...',
+    color: '#6366f1',
+    textColor: '#f8fafc',
+    maskColor: 'rgba(11, 15, 25, 0.7)'
+  });
+
+  try {
+    const resp = await fetch('/api/factors/correlation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbols: poolSymbols,
+        start_date: '2023-01-01',
+        end_date: '2024-01-01'
+      })
+    });
+    const res = await resp.json();
+    factorState.chart.hideLoading();
+
+    if (res.code !== 200) {
+      alert(`获取多因子相关性失败: ${res.detail || res.message}`);
+      return;
+    }
+
+    factorState.corrResult = res.data;
+    factorState.corrSymbols = poolSymbols.join(',');
+    renderCorrelationHeatmap(res.data);
+  } catch (err) {
+    factorState.chart.hideLoading();
+    console.error('因子相关性接口错误:', err);
+  }
+}
+
+function renderCorrelationHeatmap(corrData) {
+  if (!factorState.chart || !corrData) return;
+
+  const names = corrData.factor_labels || corrData.factor_names || [];
+  const matrix = corrData.matrix || [];
+
+  const heatmapData = corrData.heatmap_data || [];
+  if (heatmapData.length === 0) {
+    for (let i = 0; i < matrix.length; i++) {
+      for (let j = 0; j < (matrix[i] || []).length; j++) {
+        heatmapData.push([j, i, parseFloat(matrix[i][j].toFixed(3))]);
+      }
+    }
+  }
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      position: 'top',
+      backgroundColor: 'rgba(17, 22, 34, 0.95)',
+      borderColor: 'rgba(255, 255, 255, 0.1)',
+      textStyle: { color: '#f8fafc', fontSize: 12 },
+      formatter: (params) => {
+        const xName = names[params.value[0]] || `因子${params.value[0]}`;
+        const yName = names[params.value[1]] || `因子${params.value[1]}`;
+        const val = params.value[2];
+        const status = Math.abs(val) >= 0.65 ? '⚠️ 高共线冗余' : (Math.abs(val) <= 0.15 ? '⭐ 互补正交' : '中度相关');
+        const color = Math.abs(val) >= 0.65 ? '#fbbf24' : (Math.abs(val) <= 0.15 ? '#34d399' : '#38bdf8');
+        return `
+          <div style="font-weight:600;margin-bottom:4px;">${yName} × ${xName}</div>
+          <div>Spearman 秩相关系数: <b style="color:${color};font-family:monospace;">${val > 0 ? '+' : ''}${val.toFixed(3)}</b></div>
+          <div style="font-size:11px;color:#94a3b8;margin-top:2px;">组合评价: <span style="color:${color};">${status}</span></div>
+        `;
+      }
+    },
+    grid: {
+      left: '14%',
+      right: '6%',
+      top: '6%',
+      bottom: '18%'
+    },
+    xAxis: {
+      type: 'category',
+      data: names,
+      splitArea: { show: true, areaStyle: { color: ['rgba(255,255,255,0.01)', 'rgba(255,255,255,0.03)'] } },
+      axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.15)' } },
+      axisLabel: { color: '#94a3b8', fontSize: 11, interval: 0, rotate: 18 }
+    },
+    yAxis: {
+      type: 'category',
+      data: names,
+      splitArea: { show: true, areaStyle: { color: ['rgba(255,255,255,0.01)', 'rgba(255,255,255,0.03)'] } },
+      axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.15)' } },
+      axisLabel: { color: '#94a3b8', fontSize: 11 }
+    },
+    visualMap: {
+      min: -1.0,
+      max: 1.0,
+      calculable: true,
+      orient: 'horizontal',
+      left: 'center',
+      bottom: '0%',
+      inRange: {
+        color: ['#3b82f6', '#1e293b', '#ef4444']
+      },
+      textStyle: { color: '#94a3b8', fontSize: 11 }
+    },
+    series: [
+      {
+        name: '相关系数',
+        type: 'heatmap',
+        data: heatmapData,
+        label: {
+          show: true,
+          color: '#f8fafc',
+          fontSize: 11,
+          fontFamily: 'monospace',
+          formatter: (p) => p.value[2].toFixed(2)
+        },
+        emphasis: {
+          itemStyle: {
+            shadowBlur: 10,
+            shadowColor: 'rgba(0, 0, 0, 0.6)'
+          }
+        }
+      }
+    ]
+  };
+
+  factorState.chart.setOption(option, true);
+
+  // 填充共线性与正交性诊断卡片
+  const redList = document.getElementById('diag-redundant-list');
+  if (redList) {
+    if (corrData.redundant_pairs && corrData.redundant_pairs.length > 0) {
+      redList.innerHTML = corrData.redundant_pairs.map(p => {
+        const nameA = p.factor1 || p.name_a;
+        const nameB = p.factor2 || p.name_b;
+        return `<li><strong>${nameA}</strong> 与 <strong>${nameB}</strong> <span class="corr-val warn">r = ${p.correlation > 0 ? '+' : ''}${p.correlation.toFixed(3)}</span> <span style="color:#94a3b8;">(建议只保留其一以避免权重重叠)</span></li>`;
+      }).join('');
+    } else {
+      redList.innerHTML = `<li class="diag-empty">未发现高度共线冗余因子组合 (|r| ≥ 0.65)，因子独立性良好。</li>`;
+    }
+  }
+
+  const orthoList = document.getElementById('diag-orthogonal-list');
+  if (orthoList) {
+    if (corrData.orthogonal_pairs && corrData.orthogonal_pairs.length > 0) {
+      orthoList.innerHTML = corrData.orthogonal_pairs.map(p => {
+        const nameA = p.factor1 || p.name_a;
+        const nameB = p.factor2 || p.name_b;
+        return `<li><strong>${nameA}</strong> 与 <strong>${nameB}</strong> <span class="corr-val good">r = ${p.correlation > 0 ? '+' : ''}${p.correlation.toFixed(3)}</span> <span style="color:#94a3b8;">(正交互补，合成多因子模型的优选组合)</span></li>`;
+      }).join('');
+    } else {
+      orthoList.innerHTML = `<li class="diag-empty">未发现低相关互补因子组合 (|r| ≤ 0.15)。</li>`;
+    }
+  }
+}
+
 function renderFactorGroupTable(stats) {
   const tbody = document.getElementById('factor-group-table-body');
   if (!tbody) return;
@@ -1893,4 +2091,298 @@ function renderFactorGroupTable(stats) {
     tbody.appendChild(tr);
   });
 }
+
+/* ==========================================================================
+   Phase 2: 实盘模拟盯盘与预警推送中心 (Paper Trading Watchdog & Alerts)
+   ========================================================================== */
+const watchdogState = {
+  config: null,
+  signals: [],
+  hasScanned: false
+};
+
+function initWatchdog() {
+  const platformSelect = document.getElementById('wd-platform-select');
+  const secretInput = document.getElementById('wd-secret-input');
+  const urlInput = document.getElementById('wd-url-input');
+  const autoAlertCheck = document.getElementById('wd-auto-alert-check');
+  const saveConfigBtn = document.getElementById('wd-save-config-btn');
+  const testWebhookBtn = document.getElementById('wd-test-webhook-btn');
+  const scanBtn = document.getElementById('wd-scan-btn');
+
+  // 1. 加载配置
+  fetch('/api/watchdog/config')
+    .then(res => res.json())
+    .then(res => {
+      const data = res.data || res;
+      if (data) {
+        watchdogState.config = data;
+        const platform = data.webhook_platform || data.platform || 'feishu';
+        const secret = data.webhook_secret || data.secret || '';
+        const url = data.webhook_url || '';
+        const autoAlert = data.auto_alert_enabled ?? data.auto_alert ?? false;
+
+        if (platformSelect && platform) platformSelect.value = platform;
+        if (secretInput && secret) secretInput.value = secret;
+        if (urlInput && url) urlInput.value = url;
+        if (autoAlertCheck) autoAlertCheck.checked = !!autoAlert;
+
+        updatePlatformKpi();
+        renderWatchdogTasks(data.monitored_tasks || []);
+      }
+    })
+    .catch(err => console.error('加载盯盘配置失败:', err));
+
+  platformSelect && platformSelect.addEventListener('change', () => {
+    updatePlatformKpi();
+  });
+
+  function updatePlatformKpi() {
+    const kpiEl = document.getElementById('wd-kpi-platform');
+    if (kpiEl && platformSelect) {
+      const txt = platformSelect.options[platformSelect.selectedIndex]?.text || '';
+      kpiEl.textContent = txt.split(' ')[0] || '飞书';
+    }
+  }
+
+  // 2. 保存配置
+  saveConfigBtn && saveConfigBtn.addEventListener('click', async () => {
+    const payload = {
+      webhook_platform: platformSelect.value,
+      webhook_secret: secretInput.value.trim(),
+      webhook_url: urlInput.value.trim(),
+      auto_alert_enabled: autoAlertCheck.checked
+    };
+
+    saveConfigBtn.textContent = '⏳ 保存中...';
+    try {
+      const resp = await fetch('/api/watchdog/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const res = await resp.json();
+      if (res.code === 200) {
+        saveConfigBtn.textContent = '✅ 已保存';
+        watchdogState.config = { ...watchdogState.config, ...payload };
+        setTimeout(() => { saveConfigBtn.textContent = '💾 保存配置'; }, 1500);
+      } else {
+        alert(`保存配置失败: ${res.detail || res.message}`);
+        saveConfigBtn.textContent = '💾 保存配置';
+      }
+    } catch (err) {
+      alert(`保存失败: ${err.message}`);
+      saveConfigBtn.textContent = '💾 保存配置';
+    }
+  });
+
+  // 3. 测试 Webhook 连通性
+  testWebhookBtn && testWebhookBtn.addEventListener('click', async () => {
+    const payload = {
+      webhook_platform: platformSelect.value,
+      webhook_secret: secretInput.value.trim(),
+      webhook_url: urlInput.value.trim()
+    };
+
+    if (!payload.webhook_url) {
+      alert('请先输入 Webhook 机器人的完整地址 (URL) 后再进行测试！');
+      return;
+    }
+
+    testWebhookBtn.classList.add('loading');
+    const originalText = testWebhookBtn.innerHTML;
+    testWebhookBtn.innerHTML = '<span class="btn-spinner"></span> 正在测试连通性...';
+
+    try {
+      const resp = await fetch('/api/watchdog/test-webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const res = await resp.json();
+      testWebhookBtn.classList.remove('loading');
+      testWebhookBtn.innerHTML = originalText;
+
+      if (res.code === 200 || res.success) {
+        alert(`🎉 测试推送成功！\n平台: ${payload.webhook_platform}\n消息: ${res.message}\n请前往飞书/钉钉/企微群组查收测试预警卡片！`);
+      } else {
+        alert(`❌ Webhook 测试未通过: ${res.detail || res.message}`);
+      }
+    } catch (err) {
+      testWebhookBtn.classList.remove('loading');
+      testWebhookBtn.innerHTML = originalText;
+      alert(`网络或请求失败: ${err.message}`);
+    }
+  });
+
+  // 4. 扫描信号按键
+  scanBtn && scanBtn.addEventListener('click', () => {
+    triggerWatchdogScan();
+  });
+}
+
+async function triggerWatchdogScan() {
+  const scanBtn = document.getElementById('wd-scan-btn');
+  const badgeEl = document.getElementById('wd-scan-time-badge');
+
+  if (scanBtn) scanBtn.classList.add('loading');
+
+  try {
+    const resp = await fetch('/api/watchdog/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const res = await resp.json();
+    if (scanBtn) scanBtn.classList.remove('loading');
+
+    if (res.code !== 200) {
+      alert(`扫描信号失败: ${res.detail || res.message}`);
+      return;
+    }
+
+    watchdogState.hasScanned = true;
+    const signals = res.data.signals || [];
+    watchdogState.signals = signals;
+
+    if (badgeEl) {
+      const now = new Date();
+      badgeEl.textContent = `最后扫描: ${now.toLocaleTimeString()}`;
+    }
+
+    const kpiSig = document.getElementById('wd-kpi-signals');
+    const countSig = document.getElementById('wd-signals-count');
+    if (kpiSig) kpiSig.textContent = signals.length;
+    if (countSig) countSig.textContent = signals.length;
+
+    renderWatchdogSignals(signals);
+    if (res.data.monitored_tasks) {
+      renderWatchdogTasks(res.data.monitored_tasks);
+    }
+  } catch (err) {
+    if (scanBtn) scanBtn.classList.remove('loading');
+    console.error('盯盘扫描失败:', err);
+  }
+}
+
+function renderWatchdogTasks(tasks) {
+  const tbody = document.getElementById('wd-tasks-table-body');
+  const kpiTasks = document.getElementById('wd-kpi-tasks');
+  if (kpiTasks) kpiTasks.textContent = tasks.length;
+  if (!tbody) return;
+
+  if (!tasks || tasks.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty-cell">未配置盯盘任务</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = '';
+  tasks.forEach(t => {
+    const tr = document.createElement('tr');
+    const paramsText = Object.entries(t.params || {}).map(([k, v]) => `${k}=${v}`).join(', ');
+    const taskId = t.id || t.task_id;
+    const stratName = t.strategy_label || t.strategy_name;
+    const symText = t.symbol_name ? `${t.symbol} (${t.symbol_name})` : t.symbol;
+    const isEnabled = t.enabled !== false;
+
+    tr.innerHTML = `
+      <td><code>${taskId}</code></td>
+      <td><b>${stratName}</b></td>
+      <td><span class="meta-tag" style="background:rgba(56,189,248,0.15);color:#38bdf8;">${symText}</span></td>
+      <td><span style="font-family:var(--font-mono);font-size:0.75rem;color:#94a3b8;">${paramsText}</span></td>
+      <td><span class="badge-status ${isEnabled ? 'success' : 'ready'}">${isEnabled ? '监控中' : '已暂停'}</span></td>
+      <td><button type="button" class="chip-btn" style="padding:2px 8px;font-size:0.72rem;" onclick="triggerWatchdogScan()">⚡ 单测扫描</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderWatchdogSignals(signals) {
+  const container = document.getElementById('wd-signals-container');
+  if (!container) return;
+
+  if (!signals || signals.length === 0) {
+    container.innerHTML = `
+      <div class="empty-signals-box">
+        <span class="empty-icon">✅</span>
+        <p>所有监控策略实时指标正常，当前无触发展望买卖信号。</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = '';
+  signals.forEach(sig => {
+    const card = document.createElement('div');
+    const actionClass = (sig.action || '').toLowerCase(); // buy, sell, rebalance
+    card.className = `signal-card ${actionClass}`;
+
+    let actionLabel = '买入信号';
+    if (sig.action === 'SELL') actionLabel = '卖出信号';
+    else if (sig.action === 'REBALANCE') actionLabel = '调仓换股';
+
+    const stratLabel = sig.strategy_label || sig.strategy_name || sig.strategy_id || '策略';
+    const sigTime = sig.date || sig.timestamp || '最新日线';
+
+    card.innerHTML = `
+      <div class="signal-card-header">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="signal-action-badge">${actionLabel} [${sig.action}]</span>
+          <span class="signal-strategy-name">${stratLabel}</span>
+        </div>
+        <span class="signal-time-badge">${sigTime}</span>
+      </div>
+
+      <div class="signal-body">
+        <div class="signal-target-row">
+          <span class="signal-symbol-code">${sig.symbol}</span>
+          <span class="signal-symbol-name">${sig.symbol_name || ''}</span>
+          <span class="signal-price">¥${(sig.price || 0).toFixed(2)}</span>
+        </div>
+        <div class="signal-reason">
+          💡 <strong>触发逻辑:</strong> ${sig.reason}
+        </div>
+      </div>
+
+      <div class="signal-card-footer">
+        <span class="diag-time">系统盯盘侦测引擎</span>
+        <button type="button" class="signal-push-btn" data-sigid="${sig.id || sig.signal_id}">
+          📤 推送此预警到群机器人
+        </button>
+      </div>
+    `;
+
+    // 绑定推送单条信号
+    const pushBtn = card.querySelector('.signal-push-btn');
+    if (pushBtn) {
+      pushBtn.addEventListener('click', async () => {
+        pushBtn.disabled = true;
+        pushBtn.textContent = '⏳ 推送中...';
+
+        try {
+          const resp = await fetch('/api/watchdog/send-signal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ signal: sig })
+          });
+          const res = await resp.json();
+          if (res.code === 200 || res.success) {
+            pushBtn.className = 'signal-pushed-badge';
+            pushBtn.textContent = '✅ 已推送到机器人';
+          } else {
+            pushBtn.disabled = false;
+            pushBtn.textContent = '❌ 推送失败(重试)';
+            alert(`推送失败: ${res.detail || res.message}`);
+          }
+        } catch (err) {
+          pushBtn.disabled = false;
+          pushBtn.textContent = '❌ 网络异常(重试)';
+          alert(`网络异常: ${err.message}`);
+        }
+      });
+    }
+
+    container.appendChild(card);
+  });
+}
+
 

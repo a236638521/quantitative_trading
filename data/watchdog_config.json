@@ -1,0 +1,60 @@
+{
+  "webhook_platform": "feishu",
+  "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/test",
+  "webhook_secret": "",
+  "auto_alert_enabled": true,
+  "monitored_tasks": [
+    {
+      "id": "task_dual_ma_300",
+      "strategy_name": "DualMAStrategy",
+      "strategy_label": "双均线交叉策略",
+      "symbol": "510300",
+      "symbol_name": "沪深300ETF",
+      "params": {
+        "fast_period": 5,
+        "slow_period": 20,
+        "position_pct": 0.95
+      },
+      "enabled": true
+    },
+    {
+      "id": "task_turtle_500",
+      "strategy_name": "TurtleStrategy",
+      "strategy_label": "海龟唐奇安突破策略",
+      "symbol": "510500",
+      "symbol_name": "中证500ETF",
+      "params": {
+        "entry_period": 20,
+        "exit_period": 10,
+        "atr_period": 14,
+        "position_pct": 0.95
+      },
+      "enabled": true
+    },
+    {
+      "id": "task_etf_rotation",
+      "strategy_name": "ETFMomentumRotationStrategy",
+      "strategy_label": "大类资产 ETF 动量轮动",
+      "symbol": "510300,510500,513100,518880,511010",
+      "symbol_name": "ETF 全天候资产池",
+      "params": {
+        "lookback_period": 20,
+        "top_n": 1,
+        "use_risk_adjusted": true
+      },
+      "enabled": true
+    },
+    {
+      "id": "task_multi_factor",
+      "strategy_name": "MultiFactorStockSelectionStrategy",
+      "strategy_label": "核心蓝筹多因子截面选股",
+      "symbol": "600519,000858,300750,002594,601318,600036",
+      "symbol_name": "核心蓝筹选股池",
+      "params": {
+        "top_n": 3,
+        "lookback_period": 20
+      },
+      "enabled": true
+    }
+  ]
+}

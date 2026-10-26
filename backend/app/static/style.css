@@ -1307,3 +1307,461 @@ body {
   margin-top: 8px;
 }
 
+/* 多因子相关性与共线性智能诊断卡片 */
+.corr-diagnosis-panel {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.diagnosis-block {
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.diagnosis-block.warn-block {
+  border-left: 3px solid #fbbf24;
+  background: rgba(251, 191, 36, 0.04);
+}
+
+.diagnosis-block.good-block {
+  border-left: 3px solid #10b981;
+  background: rgba(16, 185, 129, 0.04);
+}
+
+.diag-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 10px;
+}
+
+.diag-icon {
+  font-size: 1rem;
+}
+
+.diag-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diag-list li {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.diag-list li strong {
+  color: var(--text-main);
+  font-family: var(--font-mono);
+}
+
+.diag-list .corr-val {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.diag-list .corr-val.warn {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.15);
+}
+
+.diag-list .corr-val.good {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.15);
+}
+
+.diag-empty {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 4px 0;
+}
+
+/* ==========================================================================
+   Phase 2: 实盘模拟盯盘与预警推送看板
+   ========================================================================== */
+.watchdog-container {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.watchdog-top-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 16px;
+}
+
+.card-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.card-header-row h4 {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text-main);
+  margin: 0;
+}
+
+.badge-tag {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+}
+
+.badge.status-live {
+  font-size: 0.72rem;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.watchdog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form-row-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.watchdog-switch-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.switch-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.switch-text {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.btn-group-right {
+  display: flex;
+  gap: 10px;
+}
+
+.chip-btn.primary {
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  color: #ffffff;
+  border-color: #6366f1;
+}
+
+.chip-btn.primary:hover {
+  background: linear-gradient(135deg, #4338ca, #4f46e5);
+}
+
+.watchdog-status-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.watchdog-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.kpi-mini {
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kpi-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.kpi-val {
+  font-size: 1.15rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text-main);
+}
+
+.kpi-val.highlight {
+  color: #38bdf8;
+}
+
+.watchdog-hint {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.watchdog-scan-btn {
+  width: 100%;
+  padding: 12px;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+/* 实时信号警报卡片流 */
+.signals-section {
+  padding: 16px 18px;
+}
+
+.signals-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.signals-header h3 {
+  font-size: 0.96rem;
+  font-weight: 600;
+  color: var(--text-main);
+  margin: 0;
+}
+
+.section-sub {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin-left: 8px;
+}
+
+.pulse-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  color: #34d399;
+  padding: 3px 10px;
+  background: rgba(16, 185, 129, 0.1);
+  border-radius: 12px;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+  animation: pulseAnimation 1.6s infinite ease-in-out;
+}
+
+@keyframes pulseAnimation {
+  0% { transform: scale(0.9); opacity: 0.7; }
+  50% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 12px #34d399; }
+  100% { transform: scale(0.9); opacity: 0.7; }
+}
+
+.signals-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 14px;
+}
+
+.empty-signals-box {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 40px 20px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-sm);
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+}
+
+.empty-icon {
+  font-size: 2rem;
+  display: block;
+  margin-bottom: 8px;
+  opacity: 0.6;
+}
+
+/* 信号卡片样式 */
+.signal-card {
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.signal-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+}
+
+.signal-card.buy {
+  border-left: 4px solid #ef4444;
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.06), var(--bg-surface));
+}
+
+.signal-card.sell {
+  border-left: 4px solid #10b981;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.06), var(--bg-surface));
+}
+
+.signal-card.rebalance {
+  border-left: 4px solid #38bdf8;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.06), var(--bg-surface));
+}
+
+.signal-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.signal-action-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+}
+
+.signal-card.buy .signal-action-badge {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.signal-card.sell .signal-action-badge {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.signal-card.rebalance .signal-action-badge {
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}
+
+.signal-strategy-name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.signal-time-badge {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.signal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.signal-target-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.signal-symbol-code {
+  font-size: 0.96rem;
+  font-weight: 700;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+}
+
+.signal-symbol-name {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.signal-price {
+  margin-left: auto;
+  font-size: 0.96rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: #f59e0b;
+}
+
+.signal-reason {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 8px 10px;
+  border-radius: 4px;
+}
+
+.signal-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.signal-push-btn {
+  font-size: 0.72rem;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.signal-push-btn:hover {
+  background: rgba(99, 102, 241, 0.3);
+  color: #ffffff;
+}
+
+.signal-pushed-badge {
+  font-size: 0.7rem;
+  color: #34d399;
+}
+
+
