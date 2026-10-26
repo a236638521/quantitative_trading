@@ -41,8 +41,9 @@ Thumbs.db
 tools/
 *.exe
 
-# 公网穿透
+# 公网穿透与本地启动
 tunnel_url.txt
 启动公网穿透服务.bat
+启动本地回测服务.bat
 run_cloudflared.py
 
