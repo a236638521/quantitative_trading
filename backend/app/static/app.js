@@ -78,6 +78,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initSandbox();
   initFactorResearch();
   initWatchdog();
+  initML();
   await loadStrategies();
   // 首次进入自动跑一次默认回测展示给用户
   triggerBacktest();
@@ -1122,6 +1123,13 @@ function initViewSwitcher() {
         } else if (targetId === 'view-watchdog') {
           if (!watchdogState.hasScanned) {
             triggerWatchdogScan();
+          }
+        } else if (targetId === 'view-ml') {
+          if (mlState.chart) {
+            mlState.chart.resize();
+          }
+          if (!mlState.hasLoaded) {
+            loadMLFeatures();
           }
         }
       }, 50);
@@ -2384,5 +2392,721 @@ function renderWatchdogSignals(signals) {
     container.appendChild(card);
   });
 }
+
+/* ==========================================================================
+   Phase 3: AI 机器学习 Alpha 预测与动态组合管理 (ML Module)
+   ========================================================================== */
+const mlState = {
+  hasLoaded: false,
+  features: [],
+  selectedFeatures: new Set(),
+  activeTab: 'equity',
+  chart: null,
+  trainResult: null,
+  backtestResult: null,
+  isRunning: false
+};
+
+function initML() {
+  const chartEl = document.getElementById('ml-chart-container');
+  if (chartEl && typeof echarts !== 'undefined') {
+    mlState.chart = echarts.init(chartEl);
+    window.addEventListener('resize', () => {
+      mlState.chart && mlState.chart.resize();
+    });
+  }
+
+  // 标的池快捷按钮
+  document.querySelectorAll('.ml-pool-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('.ml-pool-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      const symbols = chip.dataset.symbols;
+      const input = document.getElementById('ml-symbols-input');
+      if (input && symbols) {
+        input.value = symbols;
+      }
+    });
+  });
+
+  // 特征快速全选 / 清空 / 筛选
+  const selectAllBtn = document.getElementById('ml-features-select-all');
+  const clearAllBtn = document.getElementById('ml-features-clear-all');
+  const momentumBtn = document.getElementById('ml-features-momentum');
+  const volBtn = document.getElementById('ml-features-volatility');
+
+  if (selectAllBtn) {
+    selectAllBtn.addEventListener('click', () => {
+      document.querySelectorAll('#ml-features-grid input[type="checkbox"]').forEach(cb => {
+        cb.checked = true;
+        mlState.selectedFeatures.add(cb.value);
+      });
+      updateSelectedFeaturesCount();
+    });
+  }
+
+  if (clearAllBtn) {
+    clearAllBtn.addEventListener('click', () => {
+      document.querySelectorAll('#ml-features-grid input[type="checkbox"]').forEach(cb => {
+        cb.checked = false;
+        mlState.selectedFeatures.delete(cb.value);
+      });
+      updateSelectedFeaturesCount();
+    });
+  }
+
+  if (momentumBtn) {
+    momentumBtn.addEventListener('click', () => {
+      const momKeys = ['mom_5', 'mom_20', 'mom_60', 'reversal_1', 'bias_20'];
+      document.querySelectorAll('#ml-features-grid input[type="checkbox"]').forEach(cb => {
+        cb.checked = momKeys.includes(cb.value);
+        if (cb.checked) mlState.selectedFeatures.add(cb.value);
+        else mlState.selectedFeatures.delete(cb.value);
+      });
+      updateSelectedFeaturesCount();
+    });
+  }
+
+  if (volBtn) {
+    volBtn.addEventListener('click', () => {
+      const volKeys = ['vol_10', 'vol_20', 'rsi_14', 'boll_pct_b_20', 'vol_ratio_5_20', 'turnover_bias_20', 'amplitude_20', 'high_dist_20', 'low_dist_20'];
+      document.querySelectorAll('#ml-features-grid input[type="checkbox"]').forEach(cb => {
+        cb.checked = volKeys.includes(cb.value);
+        if (cb.checked) mlState.selectedFeatures.add(cb.value);
+        else mlState.selectedFeatures.delete(cb.value);
+      });
+      updateSelectedFeaturesCount();
+    });
+  }
+
+  // 图表选项卡切换
+  document.querySelectorAll('.ml-chart-tabs .details-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.ml-chart-tabs .details-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      mlState.activeTab = tab.dataset.tab;
+      
+      const descEl = document.getElementById('ml-chart-desc');
+      if (descEl) {
+        if (mlState.activeTab === 'equity') descEl.textContent = 'AI 组合按周调仓全真净值回测（含佣金与印花税）';
+        else if (mlState.activeTab === 'importance') descEl.textContent = '基于决策树分割增益 (Gain Importance) 的 Alpha 特征贡献度贡献占比';
+        else if (mlState.activeTab === 'ic') descEl.textContent = '严格 Walk-Forward 时序滚动样本外测试折的截面 Rank-IC 跟踪序列';
+        else if (mlState.activeTab === 'drawdown') descEl.textContent = 'AI 多因子组合历次动态水下回撤曲线及最大回撤深度';
+      }
+
+      renderMLChart();
+    });
+  });
+
+  // 触发训练与回测按键
+  const runBtn = document.getElementById('ml-train-run-btn');
+  if (runBtn) {
+    runBtn.addEventListener('click', runMLPipeline);
+  }
+
+  // 预载特征列表
+  loadMLFeatures();
+}
+
+function updateSelectedFeaturesCount() {
+  const countEl = document.getElementById('ml-selected-count');
+  if (countEl) {
+    const total = mlState.features.length || 14;
+    countEl.textContent = `已选 ${mlState.selectedFeatures.size} / ${total} 因子`;
+  }
+}
+
+async function loadMLFeatures() {
+  try {
+    const resp = await fetch('/api/ml/features');
+    const res = await resp.json();
+    if (res.code === 200 && res.data && res.data.features) {
+      mlState.features = res.data.features;
+      const grid = document.getElementById('ml-features-grid');
+      if (grid) {
+        grid.innerHTML = '';
+        mlState.selectedFeatures.clear();
+
+        res.data.features.forEach(f => {
+          mlState.selectedFeatures.add(f.name);
+          const item = document.createElement('label');
+          item.className = 'feature-checkbox-item';
+          item.innerHTML = `
+            <input type="checkbox" value="${f.name}" checked>
+            <div class="feature-checkbox-info">
+              <span class="feature-name">${f.name}</span>
+              <span class="feature-desc" title="${f.description}">${f.description}</span>
+            </div>
+          `;
+
+          const cb = item.querySelector('input[type="checkbox"]');
+          cb.addEventListener('change', () => {
+            if (cb.checked) {
+              mlState.selectedFeatures.add(f.name);
+            } else {
+              mlState.selectedFeatures.delete(f.name);
+            }
+            updateSelectedFeaturesCount();
+          });
+
+          grid.appendChild(item);
+        });
+
+        updateSelectedFeaturesCount();
+      }
+      mlState.hasLoaded = true;
+    }
+  } catch (err) {
+    console.error('加载特征列表失败:', err);
+  }
+}
+
+async function runMLPipeline() {
+  if (mlState.isRunning) return;
+
+  const symbolsInput = document.getElementById('ml-symbols-input');
+  const symbols = (symbolsInput ? symbolsInput.value : '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  if (symbols.length < 2) {
+    alert('请至少输入 2 只标的代码以进行截面多因子排序选股！');
+    return;
+  }
+
+  const selectedFeatures = Array.from(mlState.selectedFeatures);
+  if (selectedFeatures.length < 2) {
+    alert('请至少勾选 2 个特征因子以进行模型训练！');
+    return;
+  }
+
+  const startDate = document.getElementById('ml-start-date').value || '2023-01-01';
+  const endDate = document.getElementById('ml-end-date').value || '2024-01-01';
+  const modelType = document.getElementById('ml-model-type-select').value || 'lightgbm';
+  const forwardPeriod = parseInt(document.getElementById('ml-horizon-select').value || '5', 10);
+  const rebalanceFreq = document.getElementById('ml-rebalance-select').value || 'weekly';
+  const topN = parseInt(document.getElementById('ml-topn-select').value || '2', 10);
+
+  const runBtn = document.getElementById('ml-train-run-btn');
+  const statusEl = document.getElementById('ml-status-text');
+
+  mlState.isRunning = true;
+  runBtn.disabled = true;
+  if (mlState.chart) {
+    mlState.chart.showLoading({
+      text: 'AI 模型正在时序训练与回测...',
+      color: '#6366f1',
+      textColor: '#94a3b8',
+      maskColor: 'rgba(10, 13, 20, 0.7)'
+    });
+  }
+
+  statusEl.innerHTML = `
+    <span class="status-dot yellow"></span>
+    <span>AI 正在提取截面因子特征并执行 Walk-Forward 时序交叉验证训练...</span>
+  `;
+
+  try {
+    // 步骤 1: 训练模型并获取特征重要性、Rank-IC 序列与最新截面预测打分
+    const trainResp = await fetch('/api/ml/train', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbols,
+        start_date: startDate,
+        end_date: endDate,
+        feature_ids: selectedFeatures,
+        model_type: modelType,
+        forward_period: forwardPeriod,
+        test_ratio: 0.35,
+        top_n: topN
+      })
+    });
+
+    const trainRes = await trainResp.json();
+    if (trainRes.code !== 200 || !trainRes.data) {
+      throw new Error(trainRes.detail || trainRes.message || '模型训练失败');
+    }
+    mlState.trainResult = trainRes.data;
+
+    // 步骤 2: 运行全真投资组合回测 (A股规则 T+1、100股整数倍、佣金印花税)
+    statusEl.innerHTML = `
+      <span class="status-dot yellow"></span>
+      <span>模型训练完成！正在调用 A 股全真组合回测引擎执行动态调仓...</span>
+    `;
+
+    const btResp = await fetch('/api/ml/backtest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbols,
+        start_date: startDate,
+        end_date: endDate,
+        feature_ids: selectedFeatures,
+        model_type: modelType,
+        forward_period: forwardPeriod,
+        top_n: topN,
+        rebalance_freq: rebalanceFreq,
+        initial_cash: 100000.0,
+        commission_rate: 0.00025,
+        stamp_tax_rate: 0.0005,
+        slippage_rate: 0.0005
+      })
+    });
+
+    const btRes = await btResp.json();
+    if (btRes.code !== 200 || !btRes.data) {
+      throw new Error(btRes.detail || btRes.message || '组合回测失败');
+    }
+    mlState.backtestResult = btRes.data;
+
+    // 渲染所有 KPI 指标与表格、图表
+    renderMLMetrics(mlState.trainResult, mlState.backtestResult);
+    renderMLRecommendations(mlState.trainResult.latest_predictions);
+    renderMLTrades(mlState.backtestResult.trades);
+    renderMLChart();
+
+    const sum = mlState.backtestResult.summary || {};
+    const tr = (sum.total_return * 100).toFixed(2);
+    const rawIc = mlState.trainResult.metrics.ic_mean != null ? mlState.trainResult.metrics.ic_mean : mlState.trainResult.metrics.rank_ic_mean;
+    const ic = (rawIc || 0).toFixed(4);
+
+    statusEl.innerHTML = `
+      <span class="status-dot green"></span>
+      <span>✅ AI 模型训练与组合回测成功完成！样本外 Rank-IC: ${ic} | 策略累计收益: ${tr}%</span>
+    `;
+  } catch (err) {
+    console.error('AI Pipeline 异常:', err);
+    statusEl.innerHTML = `
+      <span class="status-dot" style="background:#f43f5e;box-shadow:0 0 8px rgba(244,63,94,0.6)"></span>
+      <span>❌ 执行失败: ${err.message}</span>
+    `;
+    alert(`执行失败: ${err.message}`);
+  } finally {
+    mlState.isRunning = false;
+    runBtn.disabled = false;
+    if (mlState.chart) {
+      mlState.chart.hideLoading();
+    }
+  }
+}
+
+function renderMLMetrics(trainData, btData) {
+  const sum = btData.summary || {};
+  const metrics = trainData.metrics || {};
+
+  // 1. 累计收益率
+  const totalRet = sum.total_return != null ? (sum.total_return * 100).toFixed(2) : '--';
+  const excess = sum.excess_return != null ? (sum.excess_return * 100).toFixed(2) : '--';
+  const annualRet = sum.annual_return != null ? (sum.annual_return * 100).toFixed(2) : '--';
+
+  const mTotalRetEl = document.getElementById('ml-metric-total-return');
+  mTotalRetEl.textContent = `${totalRet}%`;
+  mTotalRetEl.className = `metric-value ${parseFloat(totalRet) >= 0 ? 'text-emerald' : 'text-rose'}`;
+
+  const mExcessEl = document.getElementById('ml-metric-excess');
+  mExcessEl.textContent = `超额 ${parseFloat(excess) >= 0 ? '+' : ''}${excess}%`;
+  mExcessEl.className = `metric-sub-badge ${parseFloat(excess) >= 0 ? 'badge-pos' : 'badge-neg'}`;
+
+  document.getElementById('ml-metric-annual-return').textContent = `${annualRet}%`;
+
+  // 2. 夏普比率
+  const sharpe = sum.sharpe_ratio != null ? sum.sharpe_ratio.toFixed(2) : '--';
+  const bmkSharpe = sum.benchmark_sharpe != null ? sum.benchmark_sharpe.toFixed(2) : '--';
+  document.getElementById('ml-metric-sharpe').textContent = sharpe;
+  document.getElementById('ml-metric-bmk-sharpe').textContent = bmkSharpe;
+
+  // 3. 最大回撤
+  const maxDd = sum.max_drawdown != null ? (sum.max_drawdown * 100).toFixed(2) : '--';
+  const calmar = sum.calmar_ratio != null ? sum.calmar_ratio.toFixed(2) : '--';
+  document.getElementById('ml-metric-max-dd').textContent = `-${maxDd}%`;
+  document.getElementById('ml-metric-calmar').textContent = calmar;
+
+  // 4. Rank-IC
+  const rawIc = metrics.ic_mean != null ? metrics.ic_mean : metrics.rank_ic_mean;
+  const ic = rawIc != null ? rawIc.toFixed(4) : '--';
+  const rawIcIr = metrics.ic_ir != null ? metrics.ic_ir : metrics.annual_ir;
+  const icIr = rawIcIr != null ? rawIcIr.toFixed(2) : '--';
+  document.getElementById('ml-metric-rank-ic').textContent = ic;
+  
+  const icQualityEl = document.getElementById('ml-metric-ic-quality');
+  if (rawIc != null && rawIc > 0.05) {
+    icQualityEl.textContent = '强预测性 (IC>0.05)';
+    icQualityEl.className = 'metric-sub-badge badge-pos';
+  } else if (rawIc != null && rawIc > 0.02) {
+    icQualityEl.textContent = '有效预测 (IC>0.02)';
+    icQualityEl.className = 'metric-sub-badge badge-pos';
+  } else {
+    icQualityEl.textContent = '稳定跟踪';
+    icQualityEl.className = 'metric-sub-badge';
+  }
+  document.getElementById('ml-metric-ic-ir').textContent = icIr;
+
+  // 5. 方向准确率
+  const dirAcc = metrics.directional_accuracy != null ? (metrics.directional_accuracy * 100).toFixed(1) : '--';
+  document.getElementById('ml-metric-dir-acc').textContent = `${dirAcc}%`;
+  const nSamples = metrics.test_samples || metrics.n_samples || 0;
+  document.getElementById('ml-metric-folds').textContent = `样本数: ${nSamples}`;
+
+  // 6. 调仓与胜率
+  const tradesCount = sum.total_trades != null ? sum.total_trades : (btData.trades ? btData.trades.length : 0);
+  const winRate = sum.win_rate != null ? (sum.win_rate * 100).toFixed(1) : '--';
+  document.getElementById('ml-metric-trades-count').textContent = `${tradesCount} 笔`;
+  document.getElementById('ml-metric-winrate').textContent = `${winRate}%`;
+}
+
+function renderMLRecommendations(predictions) {
+  const tbody = document.getElementById('ml-recs-table-body');
+  const dateBadge = document.getElementById('ml-recs-date-badge');
+  if (!tbody) return;
+
+  if (!predictions || predictions.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-cell">未产生截面打分数据</td></tr>';
+    return;
+  }
+
+  const latestDate = predictions[0].date || '';
+  if (dateBadge && latestDate) {
+    dateBadge.textContent = `最新截面时间: ${latestDate}`;
+  }
+
+  tbody.innerHTML = '';
+  predictions.forEach(p => {
+    const tr = document.createElement('tr');
+    let rankBadgeClass = 'badge-rank-top';
+    if (p.rank === 1) rankBadgeClass = 'badge-rank-1';
+
+    const action = (p.recommended_action || p.action || 'HOLD').toUpperCase();
+    let actionBadgeClass = 'badge-recom-hold';
+    let actionText = '保持持有';
+    if (action === 'BUY') {
+      actionBadgeClass = 'badge-recom-buy';
+      actionText = '🔥 强烈推荐买入';
+    } else if (action === 'HOLD') {
+      actionBadgeClass = 'badge-recom-hold';
+      actionText = '✨ 建议配置持有';
+    } else {
+      actionBadgeClass = 'badge-recom-sell';
+      actionText = '建议空仓/减持';
+    }
+
+    const scorePct = p.predicted_return_pct != null ? p.predicted_return_pct.toFixed(2) : ((p.predicted_score || 0) * 100).toFixed(3);
+    const scoreClass = parseFloat(scorePct) >= 0 ? 'text-emerald' : 'text-rose';
+    const closePrice = p.latest_close != null ? p.latest_close : (p.price || 0);
+
+    tr.innerHTML = `
+      <td><span class="${rankBadgeClass}">No.${p.rank}</span></td>
+      <td><strong>${p.symbol}</strong> <span style="font-size:0.75rem;color:#94a3b8;">${p.name || p.symbol_name || ''}</span></td>
+      <td class="${scoreClass}"><strong>${parseFloat(scorePct) > 0 ? '+' : ''}${scorePct}%</strong></td>
+      <td><span class="${actionBadgeClass}">${actionText}</span></td>
+      <td style="font-family:var(--font-mono);color:#f59e0b;">¥${closePrice.toFixed(2)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderMLTrades(trades) {
+  const tbody = document.getElementById('ml-trades-table-body');
+  const countBadge = document.getElementById('ml-trades-count-badge');
+  if (!tbody) return;
+
+  if (!trades || trades.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">回测区间内未发生调仓交易</td></tr>';
+    if (countBadge) countBadge.textContent = '0 笔成交';
+    return;
+  }
+
+  if (countBadge) countBadge.textContent = `${trades.length} 笔成交`;
+
+  tbody.innerHTML = '';
+  // 逆序展示最新成交在前
+  const reversedTrades = trades.slice().reverse();
+  reversedTrades.forEach(t => {
+    const tr = document.createElement('tr');
+    const isBuy = (t.action || '').toUpperCase() === 'BUY';
+    const actionLabel = isBuy ? '<span class="badge-recom-buy">买入</span>' : '<span class="badge-recom-sell">卖出</span>';
+    const totalCost = (t.commission || 0) + (t.tax || 0);
+
+    tr.innerHTML = `
+      <td style="font-family:var(--font-mono);font-size:0.75rem;">${t.date || ''}</td>
+      <td><strong>${t.symbol || ''}</strong></td>
+      <td>${actionLabel}</td>
+      <td style="font-family:var(--font-mono);">¥${(t.price || 0).toFixed(2)}</td>
+      <td style="font-family:var(--font-mono);">${t.shares != null ? t.shares : t.amount || 0}</td>
+      <td style="font-family:var(--font-mono);color:#94a3b8;">¥${totalCost.toFixed(2)}</td>
+      <td style="font-family:var(--font-mono);font-weight:600;">¥${(t.trade_amount || (t.price * (t.shares || 0))).toFixed(2)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderMLChart() {
+  if (!mlState.chart) return;
+
+  if (mlState.activeTab === 'equity') {
+    if (!mlState.backtestResult || !mlState.backtestResult.equity_curve) {
+      mlState.chart.clear();
+      return;
+    }
+    const eqCurve = mlState.backtestResult.equity_curve || [];
+    const bmkCurve = mlState.backtestResult.benchmark_curve || [];
+    const dates = eqCurve.map(d => d.date);
+    const stratValues = eqCurve.map(d => ((d.value - 1.0) * 100).toFixed(2));
+    const bmkValues = bmkCurve.map(d => ((d.value - 1.0) * 100).toFixed(2));
+
+    const option = {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(17, 22, 34, 0.95)',
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        textStyle: { color: '#f8fafc', fontSize: 12 },
+        formatter: function (params) {
+          let tip = `<div style="font-weight:600;margin-bottom:6px;">${params[0].axisValue}</div>`;
+          params.forEach(p => {
+            const colorDot = `<span style="display:inline-block;margin-right:6px;border-radius:10px;width:9px;height:9px;background-color:${p.color};"></span>`;
+            tip += `<div>${colorDot} ${p.seriesName}: <b>${p.value}%</b></div>`;
+          });
+          return tip;
+        }
+      },
+      legend: {
+        data: ['AI 机器学习多因子策略', '沪深300 基准'],
+        textStyle: { color: '#94a3b8', fontSize: 12 },
+        top: 10
+      },
+      grid: { left: '3%', right: '3%', top: '15%', bottom: '14%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+        axisLabel: { color: '#64748b', fontSize: 11 }
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { color: '#64748b', fontSize: 11, formatter: '{value}%' },
+        splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+      },
+      dataZoom: [
+        { type: 'slider', show: true, bottom: 5, height: 18, fillerColor: 'rgba(99, 102, 241, 0.15)' },
+        { type: 'inside' }
+      ],
+      series: [
+        {
+          name: 'AI 机器学习多因子策略',
+          type: 'line',
+          data: stratValues,
+          smooth: true,
+          showSymbol: false,
+          itemStyle: { color: '#6366f1' },
+          lineStyle: { width: 2.5, color: '#6366f1' },
+          areaStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: 'rgba(99, 102, 241, 0.35)' },
+              { offset: 1, color: 'rgba(99, 102, 241, 0.00)' }
+            ])
+          }
+        },
+        {
+          name: '沪深300 基准',
+          type: 'line',
+          data: bmkValues,
+          smooth: true,
+          showSymbol: false,
+          itemStyle: { color: '#64748b' },
+          lineStyle: { width: 1.5, type: 'dashed', color: '#64748b' }
+        }
+      ]
+    };
+    mlState.chart.setOption(option, true);
+  } else if (mlState.activeTab === 'importance') {
+    const fiList = mlState.trainResult.feature_importances || mlState.trainResult.feature_importance;
+    if (!mlState.trainResult || !fiList) {
+      mlState.chart.clear();
+      return;
+    }
+    const fi = fiList.slice();
+    // 逆序排序让最大的柱子在顶部
+    fi.reverse();
+
+    const names = fi.map(f => f.name || f.id);
+    const values = fi.map(f => f.importance_pct != null ? f.importance_pct.toFixed(2) : ((f.gain_ratio || 0) * 100).toFixed(2));
+
+    const option = {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        backgroundColor: 'rgba(17, 22, 34, 0.95)',
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        textStyle: { color: '#f8fafc', fontSize: 12 },
+        formatter: function (params) {
+          const p = params[0];
+          return `<div style="font-weight:600;">${p.name}</div><div>特征增益占比: <b>${p.value}%</b></div>`;
+        }
+      },
+      grid: { left: '3%', right: '8%', top: '8%', bottom: '5%', containLabel: true },
+      xAxis: {
+        type: 'value',
+        axisLabel: { color: '#64748b', fontSize: 11, formatter: '{value}%' },
+        splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+      },
+      yAxis: {
+        type: 'category',
+        data: names,
+        axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+        axisLabel: { color: '#94a3b8', fontSize: 11 }
+      },
+      series: [
+        {
+          name: '增益占比',
+          type: 'bar',
+          data: values,
+          itemStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+              { offset: 0, color: '#4f46e5' },
+              { offset: 1, color: '#06b6d4' }
+            ]),
+            borderRadius: [0, 4, 4, 0]
+          },
+          label: {
+            show: true,
+            position: 'right',
+            formatter: '{c}%',
+            color: '#38bdf8',
+            fontSize: 11
+          }
+        }
+      ]
+    };
+    mlState.chart.setOption(option, true);
+  } else if (mlState.activeTab === 'ic') {
+    const icList = mlState.trainResult.ic_series || mlState.trainResult.rolling_ic;
+    if (!mlState.trainResult || !icList) {
+      mlState.chart.clear();
+      return;
+    }
+    const rollingIc = icList || [];
+    const dates = rollingIc.map(r => r.date);
+    const icValues = rollingIc.map(r => parseFloat((r.rank_ic != null ? r.rank_ic : r.ic || 0).toFixed(4)));
+    const meanIc = mlState.trainResult.metrics.ic_mean != null ? mlState.trainResult.metrics.ic_mean : (mlState.trainResult.metrics.rank_ic_mean || 0);
+
+    const option = {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        backgroundColor: 'rgba(17, 22, 34, 0.95)',
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        textStyle: { color: '#f8fafc', fontSize: 12 },
+        formatter: function (params) {
+          const p = params[0];
+          return `<div style="font-weight:600;">测试折时间: ${p.axisValue}</div><div>样本外 Rank-IC: <b>${p.value}</b></div>`;
+        }
+      },
+      grid: { left: '3%', right: '4%', top: '12%', bottom: '14%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+        axisLabel: { color: '#64748b', fontSize: 11 }
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { color: '#64748b', fontSize: 11 },
+        splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+      },
+      dataZoom: [
+        { type: 'slider', show: true, bottom: 5, height: 18, fillerColor: 'rgba(99, 102, 241, 0.15)' },
+        { type: 'inside' }
+      ],
+      series: [
+        {
+          name: 'Rank-IC',
+          type: 'bar',
+          data: icValues.map(val => ({
+            value: val,
+            itemStyle: {
+              color: val >= 0 ? '#10b981' : '#f43f5e',
+              borderRadius: val >= 0 ? [3, 3, 0, 0] : [0, 0, 3, 3]
+            }
+          })),
+          markLine: {
+            symbol: 'none',
+            data: [
+              {
+                yAxis: meanIc,
+                name: '平均 IC',
+                lineStyle: { color: '#06b6d4', width: 1.5, type: 'dashed' },
+                label: { formatter: `平均 IC: ${meanIc.toFixed(4)}`, color: '#06b6d4' }
+              }
+            ]
+          }
+        }
+      ]
+    };
+    mlState.chart.setOption(option, true);
+  } else if (mlState.activeTab === 'drawdown') {
+    if (!mlState.backtestResult || !mlState.backtestResult.drawdown) {
+      mlState.chart.clear();
+      return;
+    }
+    const eqCurve = mlState.backtestResult.equity_curve || [];
+    const ddList = mlState.backtestResult.drawdown || [];
+    const dates = eqCurve.map(d => d.date);
+    const ddValues = ddList.map(v => (v * 100).toFixed(2));
+
+    const option = {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(17, 22, 34, 0.95)',
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        textStyle: { color: '#f8fafc', fontSize: 12 },
+        formatter: function (params) {
+          const p = params[0];
+          return `<div style="font-weight:600;">${p.axisValue}</div><div>动态水下回撤: <b style="color:#f43f5e;">-${p.value}%</b></div>`;
+        }
+      },
+      grid: { left: '3%', right: '3%', top: '12%', bottom: '14%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+        axisLabel: { color: '#64748b', fontSize: 11 }
+      },
+      yAxis: {
+        type: 'value',
+        max: 0,
+        axisLabel: { color: '#64748b', fontSize: 11, formatter: '-{value}%' },
+        splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+      },
+      dataZoom: [
+        { type: 'slider', show: true, bottom: 5, height: 18, fillerColor: 'rgba(244, 63, 94, 0.15)' },
+        { type: 'inside' }
+      ],
+      series: [
+        {
+          name: '水下回撤',
+          type: 'line',
+          data: ddValues,
+          smooth: true,
+          showSymbol: false,
+          itemStyle: { color: '#f43f5e' },
+          lineStyle: { width: 1.8, color: '#f43f5e' },
+          areaStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: 'rgba(244, 63, 94, 0.35)' },
+              { offset: 1, color: 'rgba(244, 63, 94, 0.02)' }
+            ])
+          }
+        }
+      ]
+    };
+    mlState.chart.setOption(option, true);
+  }
+}
+
 
 

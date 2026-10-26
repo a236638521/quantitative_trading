@@ -70,12 +70,21 @@ class MarketDataProvider:
         if use_cache and self.storage.exists(norm_symbol, period="daily", adjust=adjust):
             cached_df = self.storage.load_bars(norm_symbol, period="daily", adjust=adjust)
             if cached_df is not None and not cached_df.empty:
-                # 检查日期覆盖范围
                 min_date = cached_df["date"].min()
                 max_date = cached_df["date"].max()
-                if min_date <= start_date and max_date >= end_date:
+                min_dt = pd.to_datetime(min_date)
+                max_dt = pd.to_datetime(max_date)
+                req_start_dt = pd.to_datetime(start_date)
+                req_end_dt = pd.to_datetime(end_date)
+                
+                start_covered = (min_date <= start_date) or ((min_dt - req_start_dt).days <= 5)
+                end_covered = (max_date >= end_date) or ((req_end_dt - max_dt).days <= 5)
+                
+                if start_covered and end_covered:
                     mask = (cached_df["date"] >= start_date) & (cached_df["date"] <= end_date)
-                    return cached_df.loc[mask].reset_index(drop=True)
+                    filtered = cached_df.loc[mask].reset_index(drop=True)
+                    if len(filtered) > 0:
+                        return filtered
 
         # 2. 从 Baostock 实时获取
         adjust_flag_map = {"qfq": "2", "hfq": "1", "none": "3"}

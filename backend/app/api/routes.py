@@ -17,6 +17,9 @@ from ..strategies.turtle import TurtleStrategy
 from ..strategies.bollinger_grid import BollingerGridStrategy
 from ..strategies.etf_rotation import ETFMomentumRotationStrategy
 from ..strategies.multi_factor import MultiFactorStockSelectionStrategy
+from ..ml.features import FeatureEngineer, FEATURE_DEFINITIONS
+from ..ml.model import AlphaPredictor
+from ..ml.strategy import AIMachineLearningStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +131,23 @@ STRATEGY_REGISTRY = {
             {"param": "lookback_period", "label": "特征窗口", "default_range": [10, 15, 20, 30]},
             {"param": "top_n", "label": "持股数量", "default_range": [2, 3, 5]}
         ]
+    },
+    "AIMachineLearningStrategy": {
+        "cls": AIMachineLearningStrategy,
+        "is_portfolio": True,
+        "name": "AI 机器学习 Alpha 预测驱动策略",
+        "description": "基于 LightGBM/Ridge 多维量价时序滚动学习，预测未来超额收益，动态精选截面最强标的。",
+        "default_pool": ["510300", "510500", "513100", "518880", "511010"],
+        "default_params": {
+            "model_type": "lightgbm",
+            "forward_period": 5,
+            "top_n": 2,
+            "rebalance_freq": "weekly"
+        },
+        "param_schema": [
+            {"key": "forward_period", "label": "预测期限 (日)", "type": "int", "default": 5, "min": 1, "max": 20},
+            {"key": "top_n", "label": "持仓数量 (只)", "type": "int", "default": 2, "min": 1, "max": 4}
+        ]
     }
 }
 
@@ -218,6 +238,32 @@ class WatchdogSendSignalRequest(BaseModel):
     webhook_platform: Optional[str] = Field(default=None)
     webhook_url: Optional[str] = Field(default=None)
     webhook_secret: Optional[str] = Field(default=None)
+
+
+class MLTrainRequest(BaseModel):
+    symbols: List[str] = Field(default_factory=lambda: ["510300", "510500", "513100", "518880", "511010"], description="候选标的池")
+    start_date: str = Field(default="2023-01-01", description="训练开始日期")
+    end_date: str = Field(default="2024-01-01", description="评估结束日期")
+    model_type: str = Field(default="lightgbm", description="算法模型 (lightgbm / ridge)")
+    forward_period: int = Field(default=5, description="未来预测步长 (日)")
+    test_ratio: float = Field(default=0.35, description="时序滚动样本外测试集比例")
+    feature_ids: Optional[List[str]] = Field(default=None, description="选用的特征标识列表")
+    top_n: int = Field(default=2, description="选股数量")
+
+
+class MLBacktestRequest(BaseModel):
+    symbols: List[str] = Field(default_factory=lambda: ["510300", "510500", "513100", "518880", "511010"])
+    start_date: str = Field(default="2023-01-01")
+    end_date: str = Field(default="2024-01-01")
+    model_type: str = Field(default="lightgbm")
+    forward_period: int = Field(default=5)
+    top_n: int = Field(default=2)
+    rebalance_freq: str = Field(default="weekly")
+    feature_ids: Optional[List[str]] = Field(default=None)
+    initial_cash: float = Field(default=100000.0)
+    commission_rate: float = Field(default=0.00025)
+    stamp_tax_rate: float = Field(default=0.0005)
+    slippage_rate: float = Field(default=0.0005)
 
 
 @router.get("/health")
@@ -656,5 +702,147 @@ def send_signal_alert(req: WatchdogSendSignalRequest):
     if not result.get("success", False):
         raise HTTPException(status_code=400, detail=result.get("message", "推送失败"))
     return {"code": 200, "message": "预警卡片推送成功", "data": result}
+
+
+# =========================================================================
+# Phase 3: AI / 机器学习 Alpha 预测模型与特征工程接口
+# =========================================================================
+
+@router.get("/ml/features")
+def get_ml_features():
+    """获取所有可用特征库及算法模型元数据"""
+    return {
+        "code": 200,
+        "data": {
+            "features": FEATURE_DEFINITIONS,
+            "models": [
+                {
+                    "id": "lightgbm",
+                    "name": "LightGBM 梯度提升决策树 (推荐)",
+                    "description": "非线性多决策树集成，支持特征增益提取与高维度非线性关系挖掘"
+                },
+                {
+                    "id": "ridge",
+                    "name": "Ridge 岭回归 (L2 正则化线性基准)",
+                    "description": "经典多因子线性加权基准，具有抗共线性过拟合与系数权重解释能力"
+                }
+            ]
+        }
+    }
+
+
+@router.post("/ml/train")
+def train_and_evaluate_ml(req: MLTrainRequest):
+    """
+    触发 AI/机器学习特征构建、时序向前滚动验证 (Walk-Forward) 并输出特征重要性与最新截面预测
+    """
+    bmk_df = data_provider.fetch_daily_bars(symbol="000300", start_date=req.start_date, end_date=req.end_date, adjust="qfq")
+    data_dict = data_provider.fetch_multi_daily_bars(symbols=req.symbols, start_date=req.start_date, end_date=req.end_date, adjust="qfq")
+    if not data_dict:
+        raise HTTPException(status_code=400, detail="获取标的池行情失败")
+
+    trading_dates, aligned_dict = data_provider.align_multi_bars(data_dict, bmk_df)
+    if len(trading_dates) < 40:
+        raise HTTPException(status_code=400, detail=f"有效对齐交易日仅 {len(trading_dates)} 天，建议拉长回测时间范围至 1 年以上")
+
+    try:
+        fe = FeatureEngineer(selected_feature_ids=req.feature_ids)
+        train_test_df, latest_df = fe.build_ml_dataset(
+            data_dict=aligned_dict,
+            trading_dates=trading_dates,
+            forward_period=req.forward_period,
+            relative_target=True
+        )
+
+        predictor = AlphaPredictor(model_type=req.model_type)
+        eval_result = predictor.train_walk_forward(
+            dataset_df=train_test_df,
+            feature_ids=fe.feature_ids,
+            forward_period=req.forward_period,
+            test_ratio=req.test_ratio,
+            n_folds=3
+        )
+
+        # 最新截面预测建议
+        latest_recs = predictor.predict_latest_cross_section(latest_df, fe.feature_ids)
+
+        return {
+            "code": 200,
+            "message": "AI 模型训练与时序滚动评估完成",
+            "data": {
+                "model_type": req.model_type,
+                "forward_period": req.forward_period,
+                "metrics": eval_result["metrics"],
+                "feature_importances": eval_result["feature_importances"],
+                "ic_series": eval_result["ic_series"],
+                "latest_predictions": latest_recs,
+                "symbols_count": len(req.symbols),
+                "trading_days": len(trading_dates)
+            }
+        }
+    except Exception as e:
+        logger.exception("AI 机器学习模型训练异常")
+        raise HTTPException(status_code=500, detail=f"AI 模型训练异常: {str(e)}")
+
+
+@router.post("/ml/backtest")
+def run_ml_backtest(req: MLBacktestRequest):
+    """
+    运行 AI 机器学习策略驱动的完整历史回测 (基于 A 股真实撮合引擎与费用模型)
+    """
+    bmk_df = data_provider.fetch_daily_bars(symbol="000300", start_date=req.start_date, end_date=req.end_date, adjust="qfq")
+    data_dict = data_provider.fetch_multi_daily_bars(symbols=req.symbols, start_date=req.start_date, end_date=req.end_date, adjust="qfq")
+    if not data_dict:
+        raise HTTPException(status_code=400, detail="获取标的池行情失败")
+
+    trading_dates, aligned_dict = data_provider.align_multi_bars(data_dict, bmk_df)
+
+    cost_cfg = TradingCostConfig(
+        commission_rate=req.commission_rate,
+        min_commission=5.0,
+        stamp_tax_rate=req.stamp_tax_rate,
+        transfer_fee_rate=0.00001,
+        slippage_rate=req.slippage_rate
+    )
+    backtest_cfg = BacktestConfig(
+        initial_cash=req.initial_cash,
+        cost_config=cost_cfg,
+        enable_t_plus_one=True,
+        enforce_price_limits=True
+    )
+
+    strategy_params = {
+        "model_type": req.model_type,
+        "forward_period": req.forward_period,
+        "top_n": req.top_n,
+        "rebalance_freq": req.rebalance_freq,
+        "feature_ids": req.feature_ids
+    }
+    strategy_instance = AIMachineLearningStrategy(params=strategy_params)
+    port_engine = PortfolioBacktestEngine(config=backtest_cfg)
+
+    try:
+        results = port_engine.run(
+            strategy=strategy_instance,
+            data_dict=aligned_dict,
+            trading_dates=trading_dates,
+            benchmark_df=bmk_df
+        )
+
+        # 附加上模型自身的训练指标与特征重要性供看板展示
+        summary = getattr(strategy_instance, "training_summary", {})
+        results["ai_metrics"] = summary.get("metrics", {})
+        results["feature_importances"] = summary.get("feature_importances", [])
+        results["ic_series"] = summary.get("ic_series", [])
+
+        return {
+            "code": 200,
+            "message": "AI 策略回测运行成功",
+            "data": results
+        }
+    except Exception as e:
+        logger.exception("AI 策略回测异常")
+        raise HTTPException(status_code=500, detail=f"AI 策略回测异常: {str(e)}")
+
 
 
