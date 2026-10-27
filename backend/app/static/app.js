@@ -2404,7 +2404,10 @@ const mlState = {
   chart: null,
   trainResult: null,
   backtestResult: null,
-  isRunning: false
+  optimizerResult: null,
+  selectedOptModel: 'risk_parity',
+  isRunning: false,
+  isOptimizing: false
 };
 
 function initML() {
@@ -2492,6 +2495,7 @@ function initML() {
         else if (mlState.activeTab === 'importance') descEl.textContent = '基于决策树分割增益 (Gain Importance) 的 Alpha 特征贡献度贡献占比';
         else if (mlState.activeTab === 'ic') descEl.textContent = '严格 Walk-Forward 时序滚动样本外测试折的截面 Rank-IC 跟踪序列';
         else if (mlState.activeTab === 'drawdown') descEl.textContent = 'AI 多因子组合历次动态水下回撤曲线及最大回撤深度';
+        else if (mlState.activeTab === 'frontier') descEl.textContent = '马科维茨均值-方差有效前沿曲线、250点蒙特卡洛模拟散点云与四大经典配置模型定位';
       }
 
       renderMLChart();
@@ -2502,6 +2506,18 @@ function initML() {
   const runBtn = document.getElementById('ml-train-run-btn');
   if (runBtn) {
     runBtn.addEventListener('click', runMLPipeline);
+  }
+
+  // 触发最优化与风险平价测算按键
+  const optBtn = document.getElementById('ml-optimizer-btn');
+  if (optBtn) {
+    optBtn.addEventListener('click', runOptimizerAnalysis);
+  }
+
+  // 同步优化模型权重按键
+  const applyWeightsBtn = document.getElementById('ml-apply-weights-btn');
+  if (applyWeightsBtn) {
+    applyWeightsBtn.addEventListener('click', applySelectedOptimizerModel);
   }
 
   // 预载特征列表
@@ -2636,6 +2652,9 @@ async function runMLPipeline() {
       <span>模型训练完成！正在调用 A 股全真组合回测引擎执行动态调仓...</span>
     `;
 
+    const allocSelect = document.getElementById('ml-alloc-method-select');
+    const allocationMethod = allocSelect ? allocSelect.value : 'equal_weight';
+
     const btResp = await fetch('/api/ml/backtest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2648,6 +2667,7 @@ async function runMLPipeline() {
         forward_period: forwardPeriod,
         top_n: topN,
         rebalance_freq: rebalanceFreq,
+        allocation_method: allocationMethod,
         initial_cash: 100000.0,
         commission_rate: 0.00025,
         stamp_tax_rate: 0.0005,
@@ -3105,8 +3125,460 @@ function renderMLChart() {
       ]
     };
     mlState.chart.setOption(option, true);
+  } else if (mlState.activeTab === 'frontier') {
+    if (!mlState.optimizerResult) {
+      mlState.chart.clear();
+      return;
+    }
+    const opt = mlState.optimizerResult;
+    const simPortfolios = opt.monte_carlo_portfolios || [];
+    const frontierPoints = opt.efficient_frontier || [];
+    const models = opt.models || {};
+    const assets = opt.asset_stats || [];
+
+    // 蒙特卡洛随机点云: [volatility * 100, return * 100, sharpe]
+    const simData = simPortfolios.map(p => [
+      parseFloat((p.volatility * 100).toFixed(2)),
+      parseFloat((p.return * 100).toFixed(2)),
+      parseFloat((p.sharpe || 0).toFixed(2))
+    ]);
+
+    // 有效前沿曲线: 按波动率升序排序
+    const frontierData = frontierPoints
+      .slice()
+      .sort((a, b) => a.volatility - b.volatility)
+      .map(p => [
+        parseFloat((p.volatility * 100).toFixed(2)),
+        parseFloat((p.return * 100).toFixed(2))
+      ]);
+
+    // 关键配置模型定位地标
+    const modelPoints = [];
+    const modelColors = {
+      max_sharpe: '#fbbf24',
+      risk_parity: '#34d399',
+      min_variance: '#38bdf8',
+      equal_weight: '#cbd5e1'
+    };
+    const modelNames = {
+      max_sharpe: '⭐ 最大夏普组合 (MVO)',
+      risk_parity: '🛡️ 风险平价组合 (ERC)',
+      min_variance: '📉 全局最小方差 (GMV)',
+      equal_weight: '⚖️ 朴素等权重组合 (1/N)'
+    };
+
+    ['max_sharpe', 'risk_parity', 'min_variance', 'equal_weight'].forEach(k => {
+      const m = models[k];
+      if (m) {
+        modelPoints.push({
+          name: modelNames[k],
+          value: [
+            parseFloat((m.annual_volatility * 100).toFixed(2)),
+            parseFloat((m.expected_annual_return * 100).toFixed(2)),
+            parseFloat((m.sharpe_ratio || 0).toFixed(2))
+          ],
+          modelKey: k,
+          itemStyle: {
+            color: modelColors[k],
+            borderColor: '#ffffff',
+            borderWidth: 1.5,
+            shadowBlur: 10,
+            shadowColor: modelColors[k]
+          }
+        });
+      }
+    });
+
+    // 单一标的资产散点
+    const assetPoints = assets.map(a => ({
+      name: a.symbol,
+      value: [
+        parseFloat((a.annual_volatility * 100).toFixed(2)),
+        parseFloat((a.annual_return * 100).toFixed(2)),
+        parseFloat((a.sharpe_ratio || 0).toFixed(2))
+      ],
+      itemStyle: { color: '#f43f5e', borderColor: '#ffffff', borderWidth: 1 }
+    }));
+
+    const sharpes = simPortfolios.map(p => p.sharpe || 0);
+    const minSharpe = sharpes.length ? Math.min(...sharpes) : 0;
+    const maxSharpe = sharpes.length ? Math.max(...sharpes) : 1;
+
+    const option = {
+      backgroundColor: 'transparent',
+      title: {
+        text: '马科维茨均值-方差有效前沿与风险平价资产配置',
+        subtext: '横轴: 组合年化波动率 (风险 σ) | 纵轴: 组合预期年化收益率 (E(R)) | 散点颜色映射: 夏普比率',
+        left: 20,
+        top: 10,
+        textStyle: { color: '#f8fafc', fontSize: 13, fontWeight: 600 },
+        subtextStyle: { color: '#64748b', fontSize: 11 }
+      },
+      tooltip: {
+        trigger: 'item',
+        backgroundColor: 'rgba(17, 22, 34, 0.95)',
+        borderColor: 'rgba(255, 255, 255, 0.12)',
+        textStyle: { color: '#f8fafc', fontSize: 12 },
+        formatter: function(params) {
+          if (params.seriesName === '模拟随机投资组合云') {
+            return `
+              <div style="font-weight:600;margin-bottom:4px;color:#38bdf8;">🎲 随机模拟投资组合</div>
+              <div>年化波动率: <b>${params.value[0]}%</b></div>
+              <div>预期年化收益: <b>${params.value[1]}%</b></div>
+              <div>夏普比率: <b style="color:#fbbf24;">${params.value[2]}</b></div>
+            `;
+          } else if (params.seriesName === '马科维茨有效前沿') {
+            return `
+              <div style="font-weight:600;margin-bottom:4px;color:#06b6d4;">📐 马科维茨理论最优前沿</div>
+              <div>组合年化波动: <b>${params.value[0]}%</b></div>
+              <div>前沿最优预期收益: <b>${params.value[1]}%</b></div>
+            `;
+          } else if (params.seriesName === '关键配置模型') {
+            return `
+              <div style="font-weight:600;margin-bottom:4px;color:${params.data.itemStyle.color};">${params.name}</div>
+              <div>年化波动率: <b>${params.value[0]}%</b></div>
+              <div>预期年化收益: <b>${params.value[1]}%</b></div>
+              <div>组合夏普比率: <b style="color:#fbbf24;">${params.value[2]}</b></div>
+            `;
+          } else if (params.seriesName === '单一标的资产') {
+            return `
+              <div style="font-weight:600;margin-bottom:4px;color:#f43f5e;">🏷️ 单一资产: ${params.name}</div>
+              <div>年化波动率: <b>${params.value[0]}%</b></div>
+              <div>历史年化收益: <b>${params.value[1]}%</b></div>
+              <div>标的夏普比率: <b>${params.value[2]}</b></div>
+            `;
+          }
+          return `${params.name}: [${params.value[0]}%, ${params.value[1]}%]`;
+        }
+      },
+      legend: {
+        top: 10,
+        right: 20,
+        data: ['马科维茨有效前沿', '关键配置模型', '单一标的资产', '模拟随机投资组合云'],
+        textStyle: { color: '#94a3b8', fontSize: 11 }
+      },
+      grid: { left: '4%', right: '6%', top: '16%', bottom: '12%', containLabel: true },
+      xAxis: {
+        type: 'value',
+        name: '年化波动率',
+        nameTextStyle: { color: '#64748b', fontSize: 11 },
+        scale: true,
+        axisLabel: { color: '#64748b', fontSize: 11, formatter: '{value}%' },
+        splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+      },
+      yAxis: {
+        type: 'value',
+        name: '预期年化收益',
+        nameTextStyle: { color: '#64748b', fontSize: 11 },
+        scale: true,
+        axisLabel: { color: '#64748b', fontSize: 11, formatter: '{value}%' },
+        splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+      },
+      visualMap: [
+        {
+          show: false,
+          seriesIndex: 3,
+          dimension: 2,
+          min: minSharpe,
+          max: maxSharpe,
+          inRange: {
+            color: ['#1e293b', '#3b82f6', '#06b6d4', '#10b981', '#fbbf24']
+          }
+        }
+      ],
+      series: [
+        {
+          name: '马科维茨有效前沿',
+          type: 'line',
+          data: frontierData,
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { width: 3, color: '#06b6d4', shadowBlur: 10, shadowColor: 'rgba(6, 182, 212, 0.5)' },
+          z: 3
+        },
+        {
+          name: '关键配置模型',
+          type: 'scatter',
+          data: modelPoints,
+          symbolSize: 14,
+          label: {
+            show: true,
+            position: 'top',
+            formatter: '{b}',
+            color: '#f8fafc',
+            fontSize: 11,
+            fontWeight: 600,
+            backgroundColor: 'rgba(15, 23, 42, 0.75)',
+            padding: [2, 6],
+            borderRadius: 3
+          },
+          z: 5
+        },
+        {
+          name: '单一标的资产',
+          type: 'scatter',
+          data: assetPoints,
+          symbolSize: 8,
+          label: {
+            show: true,
+            position: 'bottom',
+            formatter: '{b}',
+            color: '#cbd5e1',
+            fontSize: 10
+          },
+          z: 4
+        },
+        {
+          name: '模拟随机投资组合云',
+          type: 'scatter',
+          data: simData,
+          symbolSize: 5,
+          itemStyle: { opacity: 0.65 },
+          z: 1
+        }
+      ]
+    };
+    mlState.chart.setOption(option, true);
   }
 }
 
+// ==========================================================================
+// 投资组合最优化与风险平价相关交互处理函数
+// ==========================================================================
 
+async function runOptimizerAnalysis() {
+  if (mlState.isOptimizing) return;
 
+  const symbolsInput = document.getElementById('ml-symbols-input');
+  const symbols = (symbolsInput ? symbolsInput.value : '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  if (symbols.length < 2) {
+    alert('马科维茨有效前沿与风险平价测算需要至少 2 只标的资产！');
+    return;
+  }
+
+  const startDate = document.getElementById('ml-start-date').value || '2023-01-01';
+  const endDate = document.getElementById('ml-end-date').value || '2024-01-01';
+
+  const optBtn = document.getElementById('ml-optimizer-btn');
+  const statusEl = document.getElementById('ml-status-text');
+
+  mlState.isOptimizing = true;
+  if (optBtn) optBtn.disabled = true;
+
+  if (statusEl) {
+    statusEl.innerHTML = `
+      <span class="status-dot yellow"></span>
+      <span>正在调用二次规划求解器执行 Ledoit-Wolf 协方差收缩、马科维茨有效前沿与风险平价 ERC...</span>
+    `;
+  }
+
+  if (mlState.chart) {
+    mlState.chart.showLoading({
+      text: '正在测算有效前沿与风险平价...',
+      color: '#a855f7',
+      textColor: '#e9d5ff',
+      maskColor: 'rgba(10, 13, 20, 0.7)'
+    });
+  }
+
+  try {
+    const resp = await fetch('/api/optimizer/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbols,
+        start_date: startDate,
+        end_date: endDate,
+        num_simulations: 250,
+        num_frontier_points: 25
+      })
+    });
+
+    const res = await resp.json();
+    if (res.code !== 200 || !res.data) {
+      throw new Error(res.detail || res.message || '优化分析失败');
+    }
+
+    mlState.optimizerResult = res.data;
+
+    // 渲染对比表格
+    renderOptimizerTable(mlState.optimizerResult);
+
+    // 显示测算卡片
+    const optSection = document.getElementById('ml-optimizer-section');
+    if (optSection) {
+      optSection.style.display = 'block';
+    }
+
+    // 激活有效前沿图表 Tab 并渲染
+    document.querySelectorAll('.ml-chart-tabs .details-tab').forEach(t => {
+      if (t.dataset.tab === 'frontier') {
+        t.classList.add('active');
+      } else {
+        t.classList.remove('active');
+      }
+    });
+    mlState.activeTab = 'frontier';
+    const descEl = document.getElementById('ml-chart-desc');
+    if (descEl) {
+      descEl.textContent = '马科维茨均值-方差有效前沿曲线、250点蒙特卡洛模拟散点云与四大经典配置模型定位';
+    }
+
+    renderMLChart();
+
+    if (statusEl) {
+      statusEl.innerHTML = `
+        <span class="status-dot green"></span>
+        <span>✅ 马科维茨有效前沿与风险平价测算完成！已生成 4 大优化配置方案及风险预算分解</span>
+      `;
+    }
+  } catch (err) {
+    console.error('优化模型测算失败:', err);
+    if (statusEl) {
+      statusEl.innerHTML = `
+        <span class="status-dot" style="background:#f43f5e;box-shadow:0 0 8px rgba(244,63,94,0.6)"></span>
+        <span>❌ 测算失败: ${err.message}</span>
+      `;
+    }
+    alert(`测算失败: ${err.message}`);
+  } finally {
+    mlState.isOptimizing = false;
+    if (optBtn) optBtn.disabled = false;
+    if (mlState.chart) mlState.chart.hideLoading();
+  }
+}
+
+function renderOptimizerTable(data) {
+  const tbody = document.getElementById('ml-optimizer-table-body');
+  if (!tbody || !data || !data.models) return;
+
+  const models = data.models;
+  const symbols = data.symbols || Object.keys(models.equal_weight ? models.equal_weight.weights : {});
+
+  const modelMeta = [
+    {
+      key: 'risk_parity',
+      name: '🛡️ 风险平价模型 (Risk Parity / ERC)',
+      badgeClass: 'risk_parity',
+      desc: '均衡每只资产的边际风险贡献度 (RC 均等)，有效避免单一资产波动主导组合风险'
+    },
+    {
+      key: 'max_sharpe',
+      name: '⭐ 最大夏普比率组合 (Maximum Sharpe MVO)',
+      badgeClass: 'max_sharpe',
+      desc: '马科维茨现代资产组合理论切线最优解，单位总风险承担下获得最高预期超额回报'
+    },
+    {
+      key: 'min_variance',
+      name: '📉 全局最小方差组合 (Global Min Variance)',
+      badgeClass: 'min_variance',
+      desc: '追求组合整体方差最小化的纯防御型配置，最大程度规避系统性极端波动'
+    },
+    {
+      key: 'equal_weight',
+      name: '⚖️ 朴素等权重分配 (Equal Weight 1/N)',
+      badgeClass: 'equal_weight',
+      desc: '无先验参数估计误差的 1/N 均匀分配基准方案，兼具极强稳健性'
+    }
+  ];
+
+  tbody.innerHTML = '';
+  modelMeta.forEach(meta => {
+    const m = models[meta.key];
+    if (!m) return;
+
+    const tr = document.createElement('tr');
+    tr.className = `opt-table-row ${mlState.selectedOptModel === meta.key ? 'selected' : ''}`;
+    tr.dataset.modelKey = meta.key;
+
+    const expRet = m.expected_annual_return != null ? (m.expected_annual_return * 100).toFixed(2) : '--';
+    const vol = m.annual_volatility != null ? (m.annual_volatility * 100).toFixed(2) : '--';
+    const sharpe = m.sharpe_ratio != null ? m.sharpe_ratio.toFixed(2) : '--';
+
+    // Weights mini bars
+    let weightsHtml = '<div class="weights-grid-cell">';
+    symbols.forEach(sym => {
+      const w = m.weights[sym] != null ? m.weights[sym] : 0;
+      const wPct = (w * 100).toFixed(1);
+      weightsHtml += `
+        <div class="mini-bar-row">
+          <span class="mini-bar-label" title="${sym}">${sym}</span>
+          <div class="mini-bar-track">
+            <div class="mini-bar-fill weight" style="width: ${Math.min(100, Math.max(0, parseFloat(wPct)))}%;"></div>
+          </div>
+          <span class="mini-bar-val">${wPct}%</span>
+        </div>
+      `;
+    });
+    weightsHtml += '</div>';
+
+    // Risk Contributions mini bars
+    let rcHtml = '<div class="rc-grid-cell">';
+    symbols.forEach(sym => {
+      const rc = (m.risk_contributions && m.risk_contributions[sym] != null) ? m.risk_contributions[sym] : 0;
+      const rcPct = (rc * 100).toFixed(1);
+      rcHtml += `
+        <div class="mini-bar-row">
+          <span class="mini-bar-label" title="${sym}">${sym}</span>
+          <div class="mini-bar-track">
+            <div class="mini-bar-fill rc" style="width: ${Math.min(100, Math.max(0, parseFloat(rcPct)))}%;"></div>
+          </div>
+          <span class="mini-bar-val">${rcPct}%</span>
+        </div>
+      `;
+    });
+    rcHtml += '</div>';
+
+    tr.innerHTML = `
+      <td>
+        <div class="model-name-cell">
+          <span class="model-badge ${meta.badgeClass}">${meta.name}</span>
+          <span class="model-desc-sub">${meta.desc}</span>
+        </div>
+      </td>
+      <td><strong style="color: ${parseFloat(expRet) >= 0 ? '#34d399' : '#f43f5e'}; font-family:var(--font-mono);">${parseFloat(expRet) > 0 ? '+' : ''}${expRet}%</strong></td>
+      <td><span style="font-family:var(--font-mono); color:#94a3b8;">${vol}%</span></td>
+      <td><strong style="font-family:var(--font-mono); color:#fbbf24;">${sharpe}</strong></td>
+      <td>${weightsHtml}</td>
+      <td>${rcHtml}</td>
+    `;
+
+    tr.addEventListener('click', () => {
+      mlState.selectedOptModel = meta.key;
+      document.querySelectorAll('.opt-table-row').forEach(r => r.classList.remove('selected'));
+      tr.classList.add('selected');
+      const allocSelect = document.getElementById('ml-alloc-method-select');
+      if (allocSelect) {
+        allocSelect.value = meta.key;
+      }
+      const statusEl = document.getElementById('ml-status-text');
+      if (statusEl) {
+        statusEl.innerHTML = `
+          <span class="status-dot green"></span>
+          <span>已选中【${meta.name}】，可直接点击上方按钮运行组合全次回测</span>
+        `;
+      }
+    });
+
+    tbody.appendChild(tr);
+  });
+}
+
+function applySelectedOptimizerModel() {
+  const selectedKey = mlState.selectedOptModel || 'risk_parity';
+  const allocSelect = document.getElementById('ml-alloc-method-select');
+  if (allocSelect) {
+    allocSelect.value = selectedKey;
+    const modelNames = {
+      risk_parity: '风险平价模型 (Risk Parity / ERC)',
+      max_sharpe: '最大夏普组合 (Maximum Sharpe MVO)',
+      min_variance: '全局最小方差 (Global Min Variance)',
+      equal_weight: '朴素等权重分配 (Equal Weight 1/N)'
+    };
+    alert(`已成功将【${modelNames[selectedKey] || selectedKey}】同步至回测配置的“仓位分配模型”！\n点击【训练 AI 模型并运行全真组合回测】即可按该优化权重运行回测。`);
+  }
+}

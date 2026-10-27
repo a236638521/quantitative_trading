@@ -1,6 +1,7 @@
 import time
 from typing import Dict, Any, Optional, List
 import logging
+import pandas as pd
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -20,6 +21,7 @@ from ..strategies.multi_factor import MultiFactorStockSelectionStrategy
 from ..ml.features import FeatureEngineer, FEATURE_DEFINITIONS
 from ..ml.model import AlphaPredictor
 from ..ml.strategy import AIMachineLearningStrategy
+from ..ml.optimizer import PortfolioOptimizer
 
 logger = logging.getLogger(__name__)
 
@@ -259,11 +261,21 @@ class MLBacktestRequest(BaseModel):
     forward_period: int = Field(default=5)
     top_n: int = Field(default=2)
     rebalance_freq: str = Field(default="weekly")
+    allocation_method: str = Field(default="equal_weight", description="仓位分配模型: equal_weight / risk_parity / max_sharpe / min_variance")
     feature_ids: Optional[List[str]] = Field(default=None)
     initial_cash: float = Field(default=100000.0)
     commission_rate: float = Field(default=0.00025)
     stamp_tax_rate: float = Field(default=0.0005)
     slippage_rate: float = Field(default=0.0005)
+
+
+class OptimizerAnalyzeRequest(BaseModel):
+    symbols: List[str] = Field(default_factory=lambda: ["510300", "510500", "518880", "511010"], description="候选资产池代码列表")
+    start_date: str = Field(default="2023-01-01", description="历史回测/分析开始日期")
+    end_date: str = Field(default="2024-01-01", description="历史回测/分析结束日期")
+    risk_free_rate: float = Field(default=0.025, description="无风险利率(年化)")
+    max_weight: float = Field(default=0.6, description="单资产权重上限 (0.1 ~ 1.0)")
+
 
 
 @router.get("/health")
@@ -816,6 +828,7 @@ def run_ml_backtest(req: MLBacktestRequest):
         "forward_period": req.forward_period,
         "top_n": req.top_n,
         "rebalance_freq": req.rebalance_freq,
+        "allocation_method": req.allocation_method,
         "feature_ids": req.feature_ids
     }
     strategy_instance = AIMachineLearningStrategy(params=strategy_params)
@@ -843,6 +856,60 @@ def run_ml_backtest(req: MLBacktestRequest):
     except Exception as e:
         logger.exception("AI 策略回测异常")
         raise HTTPException(status_code=500, detail=f"AI 策略回测异常: {str(e)}")
+
+
+@router.post("/optimizer/analyze")
+def run_optimizer_analysis(req: OptimizerAnalyzeRequest):
+    """
+    运行现代投资组合理论 (MVO) 与风险平价 (Risk Parity) 模型综合分析
+    返回：
+    1. 各标的年化收益率、年化波动率与夏普比率
+    2. 等权、风险平价、最大夏普、最小方差 4 大模型的最优权重与风险贡献度 (RC%)
+    3. 马科维茨有效前沿平滑曲线点集
+    4. 蒙特卡洛随机资产组合采样散点云
+    """
+    if not req.symbols or len(req.symbols) < 2:
+        raise HTTPException(status_code=400, detail="投资组合优化至少需要提供 2 只标的代码")
+
+    data_dict = data_provider.fetch_multi_daily_bars(
+        symbols=req.symbols,
+        start_date=req.start_date,
+        end_date=req.end_date,
+        adjust="qfq"
+    )
+    if not data_dict or len(data_dict) < 2:
+        raise HTTPException(status_code=400, detail="有效标的行情数据不足以开展组合优化")
+
+    # 对齐并提取日收益率
+    ret_dict = {}
+    for sym, df in data_dict.items():
+        if df is not None and not df.empty:
+            sorted_df = df.sort_values("date").drop_duplicates(subset=["date"])
+            if "pct_chg" in sorted_df.columns:
+                ret_s = sorted_df.set_index("date")["pct_chg"] / 100.0
+            else:
+                ret_s = sorted_df.set_index("date")["close"].pct_change()
+            ret_dict[sym] = ret_s
+
+    returns_df = pd.DataFrame(ret_dict).dropna()
+    if len(returns_df) < 20:
+        raise HTTPException(status_code=400, detail=f"有效交集交易日仅 {len(returns_df)} 天，建议拉长分析时间范围至 6 个月以上")
+
+    try:
+        optimizer = PortfolioOptimizer(risk_free_rate=req.risk_free_rate)
+        analysis_result = optimizer.run_full_analysis(
+            returns_df=returns_df,
+            max_weight=req.max_weight
+        )
+        return {
+            "code": 200,
+            "message": "投资组合优化与有效前沿测算成功",
+            "data": analysis_result
+        }
+    except Exception as e:
+        logger.exception("投资组合优化异常")
+        raise HTTPException(status_code=500, detail=f"投资组合优化异常: {str(e)}")
+
 
 
 

@@ -6,10 +6,12 @@ AlphaQuant AI/Machine Learning Quantitative Module
 from .features import FeatureEngineer, FEATURE_DEFINITIONS
 from .model import AlphaPredictor
 from .strategy import AIMachineLearningStrategy
+from .optimizer import PortfolioOptimizer
 
 __all__ = [
     "FeatureEngineer",
     "FEATURE_DEFINITIONS",
     "AlphaPredictor",
     "AIMachineLearningStrategy",
+    "PortfolioOptimizer",
 ]
