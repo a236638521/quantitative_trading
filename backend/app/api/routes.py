@@ -23,8 +23,10 @@ from ..ml.model import AlphaPredictor
 from ..ml.strategy import AIMachineLearningStrategy
 from ..ml.optimizer import PortfolioOptimizer
 from ..core.attribution import PerformanceAttributor
+from ..core.stress_testing import StressTestEngine
 
 logger = logging.getLogger(__name__)
+
 
 router = APIRouter(prefix="/api")
 data_provider = MarketDataProvider()
@@ -286,6 +288,15 @@ class AttributionAnalyzeRequest(BaseModel):
     equity_curve: Optional[List[Dict[str, Any]]] = Field(default=None, description="策略净值序列")
     benchmark_curve: Optional[List[Dict[str, Any]]] = Field(default=None, description="基准净值序列")
     trades: Optional[List[Dict[str, Any]]] = Field(default=None, description="调仓明细")
+
+
+class StressTestAnalyzeRequest(BaseModel):
+    symbols: List[str] = Field(default_factory=lambda: ["510300", "510500", "518880", "511010"], description="标的代码列表")
+    weights: Optional[Dict[str, float]] = Field(default=None, description="组合持仓权重，为空则默认等权重配置")
+    start_date: str = Field(default="2023-01-01", description="行情开始日期")
+    end_date: str = Field(default="2024-01-01", description="行情结束日期")
+    equity_curve: Optional[List[Dict[str, Any]]] = Field(default=None, description="可选的策略实际累计净值序列")
+
 
 
 
@@ -875,9 +886,26 @@ def run_ml_backtest(req: MLBacktestRequest):
             logger.warning(f"业绩归因计算跳过: {attr_err}")
             results["attribution"] = None
 
+        # 运行投资组合压力测试与黑天鹅极端情景模拟
+        try:
+            stress_engine = StressTestEngine()
+            alloc_hist = results.get("allocation_history", [])
+            latest_weights = alloc_hist[-1]["weights"] if alloc_hist else {s: 1.0 / len(req.symbols) for s in req.symbols}
+            stress_res = stress_engine.run_stress_test(
+                weights=latest_weights,
+                data_dict=aligned_dict,
+                trading_dates=trading_dates,
+                equity_curve=results.get("equity_curve", [])
+            )
+            results["stress_test"] = stress_res
+        except Exception as st_err:
+            logger.warning(f"压力测试计算跳过: {st_err}")
+            results["stress_test"] = None
+
         return {
             "code": 200,
             "message": "AI 策略回测运行成功",
+
             "data": results
         }
     except Exception as e:
@@ -1007,6 +1035,46 @@ def run_attribution_analysis(req: AttributionAnalyzeRequest):
     except Exception as e:
         logger.exception("业绩归因分析异常")
         raise HTTPException(status_code=500, detail=f"业绩归因分析异常: {str(e)}")
+
+
+@router.post("/stress_test/run")
+def run_stress_test_endpoint(req: StressTestAnalyzeRequest):
+    """
+    运行投资组合压力测试与黑天鹅极端情景模拟 (含 5 大历史危机、4 大宏观冲击、VaR/CVaR 与流动性诊断)
+    """
+    bmk_df = data_provider.fetch_daily_bars(symbol="000300", start_date=req.start_date, end_date=req.end_date, adjust="qfq")
+    data_dict = data_provider.fetch_multi_daily_bars(symbols=req.symbols, start_date=req.start_date, end_date=req.end_date, adjust="qfq")
+    if not data_dict:
+        raise HTTPException(status_code=400, detail="获取标的池行情失败")
+
+    trading_dates, aligned_dict = data_provider.align_multi_bars(data_dict, bmk_df)
+    if len(trading_dates) < 20:
+        raise HTTPException(status_code=400, detail="有效交易日数据不足以开展压力测试分析")
+
+    # 若未指定权重，则按等权重配置
+    if not req.weights:
+        n_assets = len(req.symbols)
+        weights = {s: 1.0 / n_assets for s in req.symbols}
+    else:
+        weights = req.weights
+
+    try:
+        stress_engine = StressTestEngine()
+        result = stress_engine.run_stress_test(
+            weights=weights,
+            data_dict=aligned_dict,
+            trading_dates=trading_dates,
+            equity_curve=req.equity_curve
+        )
+        return {
+            "code": 200,
+            "message": "压力测试与黑天鹅情景模拟分析完成",
+            "data": result
+        }
+    except Exception as e:
+        logger.exception("压力测试分析异常")
+        raise HTTPException(status_code=500, detail=f"压力测试分析异常: {str(e)}")
+
 
 
 

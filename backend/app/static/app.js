@@ -2408,11 +2408,16 @@ const mlState = {
   backtestResult: null,
   optimizerResult: null,
   attributionResult: null,
+  stressResult: null,
+  stressScenarioChart: null,
+  stressDistChart: null,
   selectedOptModel: 'risk_parity',
   isRunning: false,
   isOptimizing: false,
-  isAttributing: false
+  isAttributing: false,
+  isStressTesting: false
 };
+
 
 function initML() {
   const chartEl = document.getElementById('ml-chart-container');
@@ -2501,6 +2506,7 @@ function initML() {
         else if (mlState.activeTab === 'drawdown') descEl.textContent = 'AI 多因子组合历次动态水下回撤曲线及最大回撤深度';
         else if (mlState.activeTab === 'frontier') descEl.textContent = '马科维茨均值-方差有效前沿曲线、250点蒙特卡洛模拟散点云与四大经典配置模型定位';
         else if (mlState.activeTab === 'attribution') descEl.textContent = 'Brinson-Fachler 行业多期累计业绩归因演化曲线（行业配置效应 + 选股Alpha效应 + 交互协同效应）';
+        else if (mlState.activeTab === 'stress') descEl.textContent = 'A 股极端黑天鹅危机重放承压对比（五大历史事件深度 + 日收益率极端在险价值切片）';
       }
 
       renderMLChart();
@@ -2524,6 +2530,18 @@ function initML() {
   if (attribBtn) {
     attribBtn.addEventListener('click', runAttributionAnalysis);
   }
+
+  // 触发压力测试与黑天鹅情景按键
+  const stressBtn = document.getElementById('ml-stress-btn');
+  if (stressBtn) {
+    stressBtn.addEventListener('click', runStressTestAnalysis);
+  }
+
+  const stressRerunBtn = document.getElementById('ml-stress-rerun-btn');
+  if (stressRerunBtn) {
+    stressRerunBtn.addEventListener('click', runStressTestAnalysis);
+  }
+
 
   // 同步优化模型权重按键
   const applyWeightsBtn = document.getElementById('ml-apply-weights-btn');
@@ -2701,6 +2719,11 @@ async function runMLPipeline() {
     if (mlState.backtestResult.attribution) {
       renderAttribution(mlState.backtestResult.attribution);
     }
+
+    if (mlState.backtestResult.stress_test) {
+      renderStressTest(mlState.backtestResult.stress_test);
+    }
+
 
     const sum = mlState.backtestResult.summary || {};
     const tr = (sum.total_return * 100).toFixed(2);
@@ -3461,8 +3484,113 @@ function renderMLChart() {
       ]
     };
     mlState.chart.setOption(option, true);
+  } else if (mlState.activeTab === 'stress') {
+    if (!mlState.stressResult) {
+      mlState.chart.clear();
+      return;
+    }
+    const stress = mlState.stressResult;
+    const scenarios = stress.historical_scenarios || [];
+    const scNames = scenarios.map(s => s.name);
+    const portLosses = scenarios.map(s => s.portfolio_loss_pct);
+    const bmkLosses = scenarios.map(s => s.bmk_drawdown_pct);
+    const relAlphas = scenarios.map(s => s.relative_defensive_alpha_pct);
+
+    const option = {
+      backgroundColor: 'transparent',
+      title: {
+        text: 'A 股五大历史极端黑天鹅危机重放承压对比',
+        subtext: '负值代表危机期间组合跌幅深度 | 绿色折线表示相比沪深300同期最大回撤的相对超额防御 Alpha',
+        left: 20,
+        top: 10,
+        textStyle: { color: '#f8fafc', fontSize: 13, fontWeight: 600 },
+        subtextStyle: { color: '#64748b', fontSize: 11 }
+      },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(17, 22, 34, 0.95)',
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        textStyle: { color: '#f8fafc', fontSize: 12 },
+        formatter: function (params) {
+          let tip = `<div style="font-weight:600;margin-bottom:6px;">${params[0].axisValue}</div>`;
+          params.forEach(p => {
+            const colorDot = `<span style="display:inline-block;margin-right:6px;border-radius:10px;width:9px;height:9px;background-color:${p.color};"></span>`;
+            const val = parseFloat(p.value);
+            const valStr = `${val >= 0 ? '+' : ''}${val.toFixed(2)}%`;
+            tip += `<div>${colorDot} ${p.seriesName}: <b>${valStr}</b></div>`;
+          });
+          return tip;
+        }
+      },
+      legend: {
+        data: ['当前投资组合跌幅', '沪深300 基准最大回撤', '相对超额防御 Alpha'],
+        textStyle: { color: '#94a3b8', fontSize: 11 },
+        top: 10,
+        right: 20
+      },
+      grid: { left: '3%', right: '4%', top: '16%', bottom: '12%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: scNames,
+        axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+        axisLabel: { color: '#cbd5e1', fontSize: 11, interval: 0 }
+      },
+      yAxis: [
+        {
+          type: 'value',
+          name: '危机回撤幅度',
+          nameTextStyle: { color: '#64748b', fontSize: 11 },
+          axisLabel: { color: '#64748b', fontSize: 11, formatter: '{value}%' },
+          splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+        },
+        {
+          type: 'value',
+          name: '相对防御 Alpha',
+          nameTextStyle: { color: '#64748b', fontSize: 11 },
+          axisLabel: { color: '#64748b', fontSize: 11, formatter: '{value}%' },
+          splitLine: { show: false }
+        }
+      ],
+      series: [
+        {
+          name: '当前投资组合跌幅',
+          type: 'bar',
+          data: portLosses,
+          itemStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: 'rgba(244, 63, 94, 0.85)' },
+              { offset: 1, color: 'rgba(244, 63, 94, 0.35)' }
+            ]),
+            borderRadius: [0, 0, 4, 4]
+          },
+          barWidth: 26
+        },
+        {
+          name: '沪深300 基准最大回撤',
+          type: 'bar',
+          data: bmkLosses,
+          itemStyle: {
+            color: 'rgba(100, 116, 139, 0.45)',
+            borderRadius: [0, 0, 4, 4]
+          },
+          barWidth: 26
+        },
+        {
+          name: '相对超额防御 Alpha',
+          type: 'line',
+          yAxisIndex: 1,
+          data: relAlphas,
+          smooth: true,
+          itemStyle: { color: '#10b981' },
+          lineStyle: { width: 2.5, color: '#10b981' },
+          symbolSize: 8
+        }
+      ]
+    };
+    mlState.chart.setOption(option, true);
   }
 }
+
 
 // ==========================================================================
 // 投资组合最优化与风险平价相关交互处理函数
@@ -4066,4 +4194,442 @@ async function runAttributionAnalysis() {
     if (attribBtn) attribBtn.disabled = false;
   }
 }
+
+// ==========================================================================
+// 投资组合极端压力测试与黑天鹅情景分析处理函数
+// ==========================================================================
+
+function renderStressTest(data) {
+  if (!data) return;
+  mlState.stressResult = data;
+
+  const card = document.getElementById('ml-stress-test-section');
+  if (card) {
+    card.style.display = 'block';
+  }
+
+  const sum = data.summary || {};
+  const scorecard = data.diagnostic_scorecard || {};
+  const varCvar = data.var_cvar || {};
+  const liquidity = data.liquidity_analysis || {};
+
+  // 1. 综合抗压评级 Badge 与 核心 KPI
+  const gradeBadge = document.getElementById('ml-stress-grade-badge');
+  if (gradeBadge) {
+    const grade = sum.stress_resilience_grade || scorecard.grade || 'BBB 级 (中等)';
+    gradeBadge.textContent = `抗压评级: ${grade}`;
+    gradeBadge.style.background = `${scorecard.grade_color || '#f59e0b'}25`;
+    gradeBadge.style.color = scorecard.grade_color || '#f59e0b';
+    gradeBadge.style.borderColor = `${scorecard.grade_color || '#f59e0b'}60`;
+  }
+
+  const worstLossEl = document.getElementById('ml-stress-worst-loss');
+  if (worstLossEl) {
+    const wl = sum.max_historical_stress_loss != null ? sum.max_historical_stress_loss : scorecard.worst_scenario_loss;
+    worstLossEl.textContent = `${wl != null ? wl.toFixed(1) : '--'}%`;
+  }
+
+  const worstNameEl = document.getElementById('ml-stress-worst-name');
+  if (worstNameEl) {
+    worstNameEl.textContent = sum.worst_scenario_name || scorecard.worst_scenario_name || '--';
+  }
+
+  const var95El = document.getElementById('ml-stress-var95');
+  if (var95El) {
+    const v95 = (varCvar.var_95_hist != null ? varCvar.var_95_hist : sum.var_95) * 100;
+    var95El.textContent = `${v95.toFixed(2)}%`;
+  }
+
+  const cvar95El = document.getElementById('ml-stress-cvar95');
+  if (cvar95El) {
+    const cv95 = (varCvar.cvar_95_hist != null ? varCvar.cvar_95_hist : sum.cvar_95) * 100;
+    cvar95El.textContent = `${cv95.toFixed(2)}%`;
+  }
+
+  const var99El = document.getElementById('ml-stress-var99');
+  if (var99El) {
+    const v99 = (varCvar.var_99_hist != null ? varCvar.var_99_hist : sum.var_99) * 100;
+    var99El.textContent = `${v99.toFixed(2)}%`;
+  }
+
+  const liqDaysEl = document.getElementById('ml-stress-liq-days');
+  if (liqDaysEl) {
+    const ld = sum.liquidation_days != null ? sum.liquidation_days : liquidity.max_liquidation_days;
+    liqDaysEl.textContent = `${ld != null ? ld.toFixed(1) : 1.0} 天`;
+  }
+
+  const liqLevelEl = document.getElementById('ml-stress-liq-level');
+  if (liqLevelEl) {
+    const maxD = liquidity.max_liquidation_days || 1.0;
+    liqLevelEl.textContent = maxD <= 1.0 ? '流动性极佳 (T+1清算)' : (maxD <= 2.0 ? '流动性适中 (1-2日清算)' : '警惕微盘流动性枯竭');
+  }
+
+  // 2. 诊断建议文本
+  const diagTextEl = document.getElementById('ml-stress-diagnosis-text');
+  if (diagTextEl) {
+    diagTextEl.textContent = scorecard.diagnosis_text || '组合在历次黑天鹅冲击中表现稳健，建议继续保持多资产低相关性配置。';
+  }
+
+  // 3. 渲染五大历史情景阶梯图
+  renderStressScenarioChart(data.historical_scenarios || []);
+
+  // 4. 渲染收益率尾部在险价值核密度分布直方图
+  renderStressDistChart(varCvar);
+
+  // 5. 渲染 4 项假设性外生宏观冲击卡片
+  renderStressShocks(data.hypothetical_shocks || []);
+
+  // 6. 渲染标的流动性平仓天数与极端损失明细表
+  renderStressTable(data.asset_loss_breakdown || [], liquidity);
+}
+
+function renderStressScenarioChart(scenarios) {
+  const chartEl = document.getElementById('ml-stress-scenarios-chart');
+  if (!chartEl || typeof echarts === 'undefined') return;
+
+  if (mlState.stressScenarioChart) {
+    mlState.stressScenarioChart.dispose();
+  }
+  mlState.stressScenarioChart = echarts.init(chartEl);
+  window.addEventListener('resize', () => {
+    mlState.stressScenarioChart && mlState.stressScenarioChart.resize();
+  });
+
+  const names = scenarios.map(s => s.name);
+  const portDrops = scenarios.map(s => s.portfolio_loss_pct);
+  const bmkDrops = scenarios.map(s => s.bmk_drawdown_pct);
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(17, 22, 34, 0.95)',
+      borderColor: 'rgba(255, 255, 255, 0.1)',
+      textStyle: { color: '#f8fafc', fontSize: 12 },
+      formatter: function (params) {
+        let tip = `<div style="font-weight:600;margin-bottom:6px;">${params[0].axisValue}</div>`;
+        params.forEach(p => {
+          const colorDot = `<span style="display:inline-block;margin-right:6px;border-radius:10px;width:9px;height:9px;background-color:${p.color};"></span>`;
+          tip += `<div>${colorDot} ${p.seriesName}: <b>${p.value}%</b></div>`;
+        });
+        const sc = scenarios[params[0].dataIndex];
+        if (sc) {
+          const relAlpha = sc.relative_defensive_alpha_pct;
+          const sign = relAlpha >= 0 ? '+' : '';
+          tip += `<div style="margin-top:6px;padding-top:4px;border-top:1px dashed rgba(255,255,255,0.15);color:${relAlpha >= 0 ? '#10b981' : '#f43f5e'};">🛡️ 防御超额 Alpha: <b>${sign}${relAlpha}%</b></div>`;
+          tip += `<div style="font-size:11px;color:#94a3b8;margin-top:3px;">${sc.description}</div>`;
+        }
+        return tip;
+      }
+    },
+    legend: {
+      data: ['组合预计回撤', '沪深300同期跌幅'],
+      textStyle: { color: '#94a3b8', fontSize: 11 },
+      top: 0
+    },
+    grid: { left: '3%', right: '3%', top: '15%', bottom: '5%', containLabel: true },
+    xAxis: {
+      type: 'value',
+      axisLabel: { color: '#64748b', fontSize: 11, formatter: '{value}%' },
+      splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+    },
+    yAxis: {
+      type: 'category',
+      data: names,
+      axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+      axisLabel: { color: '#cbd5e1', fontSize: 11 }
+    },
+    series: [
+      {
+        name: '组合预计回撤',
+        type: 'bar',
+        data: portDrops,
+        barWidth: 14,
+        itemStyle: {
+          color: new echarts.graphic.LinearGradient(1, 0, 0, 0, [
+            { offset: 0, color: 'rgba(244, 63, 94, 0.9)' },
+            { offset: 1, color: 'rgba(244, 63, 94, 0.4)' }
+          ]),
+          borderRadius: [0, 4, 4, 0]
+        }
+      },
+      {
+        name: '沪深300同期跌幅',
+        type: 'bar',
+        data: bmkDrops,
+        barWidth: 14,
+        itemStyle: {
+          color: 'rgba(100, 116, 139, 0.35)',
+          borderRadius: [0, 4, 4, 0]
+        }
+      }
+    ]
+  };
+  mlState.stressScenarioChart.setOption(option);
+}
+
+function renderStressDistChart(varCvar) {
+  const chartEl = document.getElementById('ml-stress-dist-chart');
+  if (!chartEl || typeof echarts === 'undefined') return;
+
+  if (mlState.stressDistChart) {
+    mlState.stressDistChart.dispose();
+  }
+  mlState.stressDistChart = echarts.init(chartEl);
+  window.addEventListener('resize', () => {
+    mlState.stressDistChart && mlState.stressDistChart.resize();
+  });
+
+  const dist = varCvar.pnl_distribution || [];
+  const mids = dist.map(d => `${d.bin_mid}%`);
+  const counts = dist.map(d => {
+    let barColor = 'rgba(59, 130, 246, 0.6)';
+    if (d.is_tail_99) {
+      barColor = '#f43f5e';
+    } else if (d.is_tail_95) {
+      barColor = '#f59e0b';
+    }
+    return {
+      value: d.count,
+      itemStyle: { color: barColor }
+    };
+  });
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(17, 22, 34, 0.95)',
+      borderColor: 'rgba(255, 255, 255, 0.1)',
+      textStyle: { color: '#f8fafc', fontSize: 12 },
+      formatter: function (params) {
+        const item = dist[params[0].dataIndex];
+        if (!item) return '';
+        let tag = '<span style="color:#38bdf8;">常规收益区间</span>';
+        if (item.is_tail_99) tag = '<span style="color:#f43f5e;font-weight:700;">⚠️ 99% 极端在险损失区</span>';
+        else if (item.is_tail_95) tag = '<span style="color:#f59e0b;font-weight:700;">⚡ 95% 尾部在险损失区</span>';
+        return `
+          <div style="font-weight:600;">日收益率中点: ${item.bin_mid}%</div>
+          <div>样本出现频次: <b>${item.count} 交易日</b></div>
+          <div style="margin-top:4px;">风险层级: ${tag}</div>
+        `;
+      }
+    },
+    grid: { left: '3%', right: '3%', top: '15%', bottom: '5%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: mids,
+      axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+      axisLabel: { color: '#64748b', fontSize: 10, interval: 2 }
+    },
+    yAxis: {
+      type: 'value',
+      name: '天数频次',
+      nameTextStyle: { color: '#64748b', fontSize: 11 },
+      splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } },
+      axisLabel: { color: '#64748b', fontSize: 11 }
+    },
+    series: [
+      {
+        name: '收益率频次',
+        type: 'bar',
+        data: counts,
+        barWidth: '70%',
+        markLine: {
+          symbol: 'none',
+          label: { color: '#f59e0b', fontSize: 10, position: 'insideEndTop' },
+          data: [
+            {
+              name: '95% VaR 截断阈值',
+              xAxis: `${-(varCvar.var_95_hist * 100).toFixed(2)}%`,
+              lineStyle: { color: '#f59e0b', type: 'dashed', width: 2 }
+            }
+          ]
+        }
+      }
+    ]
+  };
+  mlState.stressDistChart.setOption(option);
+}
+
+function renderStressShocks(shocks) {
+  const container = document.getElementById('ml-stress-shocks-grid');
+  if (!container) return;
+
+  container.innerHTML = '';
+  shocks.forEach(sh => {
+    const card = document.createElement('div');
+    card.className = 'stress-shock-card';
+
+    const severityBadge = sh.severity === '严重风险'
+      ? '<span class="badge-tag red">严重风险</span>'
+      : (sh.severity === '中度风险'
+        ? '<span class="badge-tag yellow">中度风险</span>'
+        : '<span class="badge-tag blue">可控风险</span>');
+
+    const dropColor = sh.est_portfolio_drop_pct <= -8 ? '#f43f5e' : (sh.est_portfolio_drop_pct <= -4 ? '#f59e0b' : '#38bdf8');
+
+    card.innerHTML = `
+      <div class="stress-shock-header">
+        <span class="stress-shock-title">${sh.shock_name}</span>
+        ${severityBadge}
+      </div>
+      <div class="stress-shock-drop" style="color: ${dropColor};">
+        ${sh.est_portfolio_drop_pct.toFixed(2)}%
+      </div>
+      <div class="stress-shock-desc">
+        ${sh.param_desc}
+      </div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+function renderStressTable(breakdown, liquidity) {
+  const tbody = document.getElementById('ml-stress-table-body');
+  if (!tbody) return;
+
+  if (!breakdown || breakdown.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">未检测到持仓资产明细</td></tr>';
+    return;
+  }
+
+  const assetDetailsMap = {};
+  if (liquidity && liquidity.asset_details) {
+    liquidity.asset_details.forEach(a => {
+      assetDetailsMap[a.symbol] = a;
+    });
+  }
+
+  tbody.innerHTML = '';
+  breakdown.forEach(b => {
+    const tr = document.createElement('tr');
+    const liqInfo = assetDetailsMap[b.symbol] || {};
+    const liqDays = liqInfo.est_liquidation_days != null ? liqInfo.est_liquidation_days : 0.5;
+    const volShares = liqInfo.daily_volume_shares ? liqInfo.daily_volume_shares.toLocaleString() : '--';
+    const liqLevel = liqInfo.liquidity_level || '充裕 (T+1内变现)';
+
+    const liqClass = liqDays <= 1.0 ? 'text-emerald' : (liqDays <= 2.0 ? 'text-amber' : 'text-rose');
+    const contribColor = b.loss_contribution_ratio >= 35 ? '#f43f5e' : (b.loss_contribution_ratio >= 20 ? '#f59e0b' : '#38bdf8');
+
+    tr.innerHTML = `
+      <td><strong>${b.symbol}</strong></td>
+      <td style="font-family:var(--font-mono);">${b.weight_pct}%</td>
+      <td style="font-family:var(--font-mono);color:#94a3b8;">${volShares} 股</td>
+      <td style="font-family:var(--font-mono);font-weight:600;" class="${liqClass}">${liqDays} 天</td>
+      <td style="font-size:12px;">${liqLevel}</td>
+      <td style="font-family:var(--font-mono);color:#f43f5e;">-${b.avg_scenario_loss_pct}%</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="flex:1;background:rgba(255,255,255,0.08);height:6px;border-radius:3px;overflow:hidden;">
+            <div style="width:${Math.min(100, b.loss_contribution_ratio)}%;background:${contribColor};height:100%;"></div>
+          </div>
+          <span style="font-family:var(--font-mono);font-size:12px;color:${contribColor};font-weight:600;">${b.loss_contribution_ratio}%</span>
+        </div>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function runStressTestAnalysis() {
+  if (mlState.isStressTesting) return;
+
+  const symbolsInput = document.getElementById('ml-symbols-input');
+  const symbols = (symbolsInput ? symbolsInput.value : '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  if (symbols.length < 2) {
+    alert('极端压力测试与黑天鹅情景分析需要至少 2 只标的资产！');
+    return;
+  }
+
+  const startDate = document.getElementById('ml-start-date').value || '2023-01-01';
+  const endDate = document.getElementById('ml-end-date').value || '2024-01-01';
+
+  const stressBtn = document.getElementById('ml-stress-btn');
+  const stressRerunBtn = document.getElementById('ml-stress-rerun-btn');
+  const statusEl = document.getElementById('ml-status-text');
+
+  mlState.isStressTesting = true;
+  if (stressBtn) stressBtn.disabled = true;
+  if (stressRerunBtn) stressRerunBtn.disabled = true;
+
+  if (statusEl) {
+    statusEl.innerHTML = `
+      <span class="status-dot yellow"></span>
+      <span>正在穿透重放 A 股五大历史极端危机，计算 Cornish-Fisher 尾部在险价值与流动性清算天数...</span>
+    `;
+  }
+
+  // 尝试携带回测中真实净值序列与持仓权重
+  let weights = null;
+  let eqCurve = null;
+  if (mlState.backtestResult) {
+    const allocHist = mlState.backtestResult.allocation_history || [];
+    if (allocHist.length > 0) {
+      weights = allocHist[allocHist.length - 1].weights;
+    }
+    eqCurve = mlState.backtestResult.equity_curve || null;
+  }
+
+  try {
+    const resp = await fetch('/api/stress_test/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbols,
+        weights,
+        start_date: startDate,
+        end_date: endDate,
+        equity_curve: eqCurve
+      })
+    });
+
+    const res = await resp.json();
+    if (res.code !== 200 || !res.data) {
+      throw new Error(res.detail || res.message || '压力测试计算失败');
+    }
+
+    renderStressTest(res.data);
+
+    // 激活压力测试选项卡并更新主图
+    document.querySelectorAll('.ml-chart-tabs .details-tab').forEach(t => {
+      if (t.dataset.tab === 'stress') {
+        t.classList.add('active');
+      } else {
+        t.classList.remove('active');
+      }
+    });
+    mlState.activeTab = 'stress';
+    const descEl = document.getElementById('ml-chart-desc');
+    if (descEl) {
+      descEl.textContent = 'A 股极端黑天鹅危机重放承压对比（五大历史事件深度 + 日收益率极端在险价值切片）';
+    }
+    renderMLChart();
+
+    if (statusEl) {
+      statusEl.innerHTML = `
+        <span class="status-dot green"></span>
+        <span>✅ 组合压力测试与黑天鹅情景分析完成！五大历史极端危机承压与尾部在险价值已完整就绪</span>
+      `;
+    }
+  } catch (err) {
+    console.error('压力测试异常:', err);
+    if (statusEl) {
+      statusEl.innerHTML = `
+        <span class="status-dot" style="background:#f43f5e;box-shadow:0 0 8px rgba(244,63,94,0.6)"></span>
+        <span>❌ 压力测试失败: ${err.message}</span>
+      `;
+    }
+    alert(`压力测试失败: ${err.message}`);
+  } finally {
+    mlState.isStressTesting = false;
+    if (stressBtn) stressBtn.disabled = false;
+    if (stressRerunBtn) stressRerunBtn.disabled = false;
+  }
+}
+
 

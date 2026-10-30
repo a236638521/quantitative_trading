@@ -1056,7 +1056,12 @@
               <span class="btn-icon">🔍</span>
               <span>生成 Brinson 业绩归因与风格诊断</span>
             </button>
+            <button type="button" id="ml-stress-btn" class="chip-btn primary ml-stress-btn">
+              <span class="btn-icon">🛡️</span>
+              <span>执行黑天鹅情景压力测试</span>
+            </button>
             <div id="ml-status-text" class="ml-status-text">
+
               <span class="status-dot green"></span>
               <span>就绪：准备开始时序滚动训练与组合权重优化</span>
             </div>
@@ -1145,7 +1150,9 @@
             <button class="details-tab" data-tab="drawdown">🌊 动态水下回撤 (Drawdown Depth)</button>
             <button class="details-tab" data-tab="frontier">⚖️ 马科维茨有效前沿 & 风险平价</button>
             <button class="details-tab" data-tab="attribution">🔍 Brinson 归因 & 风格雷达</button>
+            <button class="details-tab" data-tab="stress">🛡️ 压力测试 & 黑天鹅情景</button>
           </div>
+
           <div class="ml-chart-tag" id="ml-chart-desc">AI 组合按周调仓全真净值回测（含佣金与印花税）</div>
         </div>
 
@@ -1249,7 +1256,140 @@
         </div>
       </div>
 
+      <!-- 投资组合极端压力测试与黑天鹅情景分析卡片 -->
+      <div id="ml-stress-test-section" class="card-box ml-stress-card" style="display: none; margin-bottom: 20px;">
+        <div class="card-header-row">
+          <div>
+            <h4 style="margin: 0; font-size: 15px; font-weight: 600; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+              <span>🛡️ 投资组合极端压力测试与黑天鹅情景分析</span>
+              <span class="badge-tag green" id="ml-stress-grade-badge">抗压评级: --</span>
+            </h4>
+            <div style="font-size: 12px; color: #64748b; margin-top: 4px;">
+              模拟 A 股 2015 股灾、2016 熔断、2018 贸易战、2020 疫情闪崩、2024 微盘挤兑五大历史极端危机，结合外生宏观冲击、VaR / Cornish-Fisher CVaR 尾部损失度量及流动性变现周期估算
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button type="button" id="ml-stress-rerun-btn" class="chip-btn" style="font-size: 12px; padding: 4px 10px;">
+              <span>🔄 刷新压力测试</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 压力测试核心 KPI 摘要看板 -->
+        <div class="attrib-kpi-grid" style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-top: 14px;">
+          <div class="metric-card mini">
+            <div class="metric-label">最差历史情景回撤</div>
+            <div class="metric-value-row">
+              <span id="ml-stress-worst-loss" class="metric-value text-rose">--%</span>
+            </div>
+            <div class="metric-footer">
+              <span id="ml-stress-worst-name" class="metric-sub">--</span>
+            </div>
+          </div>
+
+          <div class="metric-card mini">
+            <div class="metric-label">95% 在险价值 (VaR)</div>
+            <div class="metric-value-row">
+              <span id="ml-stress-var95" class="metric-value text-amber">--%</span>
+            </div>
+            <div class="metric-footer">
+              <span>单日最大期望损失</span>
+            </div>
+          </div>
+
+          <div class="metric-card mini">
+            <div class="metric-label">95% 尾部超额期望损失 (CVaR)</div>
+            <div class="metric-value-row">
+              <span id="ml-stress-cvar95" class="metric-value text-rose">--%</span>
+            </div>
+            <div class="metric-footer">
+              <span>尾部极端黑天鹅期望</span>
+            </div>
+          </div>
+
+          <div class="metric-card mini">
+            <div class="metric-label">99% 极端在险价值 (VaR 99%)</div>
+            <div class="metric-value-row">
+              <span id="ml-stress-var99" class="metric-value text-rose">--%</span>
+            </div>
+            <div class="metric-footer">
+              <span>极值压力测试置信度</span>
+            </div>
+          </div>
+
+          <div class="metric-card mini">
+            <div class="metric-label">组合最长清算变现天数</div>
+            <div class="metric-value-row">
+              <span id="ml-stress-liq-days" class="metric-value text-blue">-- 天</span>
+            </div>
+            <div class="metric-footer">
+              <span id="ml-stress-liq-level" class="metric-sub">流动性充裕</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 综合抗压诊断意见条 -->
+        <div id="ml-stress-diagnosis-box" class="attribution-diagnosis-box" style="margin-top: 14px; padding: 12px 16px; background: rgba(30, 41, 59, 0.4); border-left: 3px solid #f59e0b; border-radius: 6px; font-size: 13px; color: #cbd5e1; line-height: 1.6;">
+          <span style="font-weight: 600; color: #f59e0b;">🛡️ 风险总监量化诊断建议：</span>
+          <span id="ml-stress-diagnosis-text">正在评估持仓组合抗黑天鹅冲击韧性...</span>
+        </div>
+
+        <!-- 双图栅格: 历史情景阶梯图 + 尾部在险价值直方图 -->
+        <div class="attribution-charts-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+          <div class="chart-box-inner" style="background: rgba(15, 23, 42, 0.5); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 14px;">
+            <div style="font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 8px; display: flex; justify-content: space-between;">
+              <span>🏛️ 五大历史极端黑天鹅危机组合承压对比 (vs 沪深300)</span>
+              <span style="font-size: 11px; color: #94a3b8;">穿透式危机重放</span>
+            </div>
+            <div id="ml-stress-scenarios-chart" style="width: 100%; height: 320px;"></div>
+          </div>
+
+          <div class="chart-box-inner" style="background: rgba(15, 23, 42, 0.5); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 14px;">
+            <div style="font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 8px; display: flex; justify-content: space-between;">
+              <span>📊 收益率尾部在险价值分布 (VaR / CVaR 风险切片)</span>
+              <span style="font-size: 11px; color: #94a3b8;">高阶矩 Cornish-Fisher 修正</span>
+            </div>
+            <div id="ml-stress-dist-chart" style="width: 100%; height: 320px;"></div>
+          </div>
+        </div>
+
+        <!-- 4 项假设性外生宏观冲击模拟卡片网格 -->
+        <div style="margin-top: 18px;">
+          <div style="font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 10px;">
+            ⚡ 假设性外生宏观极端压力冲击响应
+          </div>
+          <div id="ml-stress-shocks-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">
+            <!-- 由 JS 动态渲染 4 项冲击卡片 -->
+          </div>
+        </div>
+
+        <!-- 标的清算天数与极端损失贡献明细表 -->
+        <div class="table-wrapper" style="margin-top: 18px; border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; overflow: hidden;">
+          <div style="padding: 10px 14px; background: rgba(15, 23, 42, 0.7); font-size: 13px; font-weight: 600; color: #e2e8f0; display: flex; justify-content: space-between;">
+            <span>📋 各标的流动性平仓天数与极端黑天鹅损失贡献明细</span>
+            <span style="font-size: 11px; color: #64748b;">单日平仓限额为过去20日平均成交量 10%</span>
+          </div>
+          <table class="data-table" style="margin: 0;">
+            <thead>
+              <tr>
+                <th style="width: 100px;">标的代码</th>
+                <th>组合权重 (%)</th>
+                <th>20日日均成交量</th>
+                <th>预估平仓清算天数</th>
+                <th>流动性状态</th>
+                <th>情景平均损失幅度 (%)</th>
+                <th style="width: 130px;">损失贡献占比 (Loss Contrib %)</th>
+              </tr>
+            </thead>
+            <tbody id="ml-stress-table-body">
+              <tr><td colspan="7" class="empty-cell">运行压力测试后呈现各标的流动性天数与损失贡献拆解</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- 底部两栏明细表 -->
+
       <div class="ml-bottom-grid">
         <!-- 左卡片: 最新截面 AI 评分预测榜 -->
         <div class="card-box">

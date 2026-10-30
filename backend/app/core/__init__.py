@@ -4,6 +4,7 @@ from .portfolio import Portfolio
 from .metrics import MetricsCalculator
 from .engine import BacktestEngine
 from .portfolio_engine import PortfolioBacktestEngine
+from .stress_testing import StressTestEngine, HISTORICAL_SCENARIOS
 
 __all__ = [
     "PerformanceAttributor",
@@ -12,5 +13,8 @@ __all__ = [
     "Portfolio",
     "MetricsCalculator",
     "BacktestEngine",
-    "PortfolioBacktestEngine"
+    "PortfolioBacktestEngine",
+    "StressTestEngine",
+    "HISTORICAL_SCENARIOS"
 ]
+
