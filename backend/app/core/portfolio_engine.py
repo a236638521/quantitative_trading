@@ -5,6 +5,7 @@ import pandas as pd
 from .portfolio import Portfolio
 from .cost import AShareCostCalculator
 from .metrics import MetricsCalculator
+from .risk_gateway import PreTradeRiskGateway
 from ..config import BacktestConfig
 
 logger = logging.getLogger(__name__)
@@ -18,13 +19,16 @@ class PortfolioBacktestEngine:
     2. 定期截面调仓：先卖后买释放现金，严格遵循 T+1 与每手100股限制
     3. 涨跌停封死与停牌保护：停牌不可调仓，涨停禁买，跌停禁卖
     4. 逐日记录资产配置权重时序（供前端持仓变迁堆叠图渲染）
+    5. 集成实盘交易事前风控网关与合规拦截器 (PreTradeRiskGateway)
     """
 
-    def __init__(self, config: Optional[BacktestConfig] = None):
+    def __init__(self, config: Optional[BacktestConfig] = None, risk_gateway: Optional[PreTradeRiskGateway] = None):
         self.config = config or BacktestConfig()
         self.cost_calc = AShareCostCalculator(self.config.cost_config)
         self.metrics_calc = MetricsCalculator()
+        self.risk_gateway = risk_gateway
         self.logs: List[str] = []
+
 
     def log(self, msg: str):
         self.logs.append(msg)
@@ -69,8 +73,10 @@ class PortfolioBacktestEngine:
 
         # 4. 逐交易日模拟推进
         for date_idx, cur_date in enumerate(trading_dates):
-            # 4.1 新交易日开盘：T+1 股份解锁为可用份额
+            # 4.1 新交易日开盘：T+1 股份解锁为可用份额，初始化事前风控日内状态
             portfolio.on_new_day()
+            if self.risk_gateway:
+                self.risk_gateway.reset_day(cur_date, portfolio.total_asset)
 
             # 4.2 获取所有标的当天的行情快照并更新最新现价
             current_bar_map = {}
@@ -81,8 +87,12 @@ class PortfolioBacktestEngine:
                     current_bar_map[sym] = row
                     portfolio.update_price(sym, close_p)
 
+            if self.risk_gateway:
+                self.risk_gateway.update_intraday_equity(portfolio.total_asset)
+
             # 4.3 触发策略截面逻辑，判断今日是否调仓并获取目标权重 {symbol: weight}
             target_weights = strategy.on_rebalance_check(date_idx, cur_date, current_bar_map, portfolio)
+
 
             # 4.4 若今天触发了调仓，执行组合权重再平衡
             if target_weights is not None:
@@ -131,6 +141,9 @@ class PortfolioBacktestEngine:
             for t in portfolio.trade_history
         ]
         metrics["logs"] = self.logs[-100:]
+        if self.risk_gateway:
+            metrics["risk_gateway_summary"] = self.risk_gateway.get_status_summary()
+            metrics["risk_gateway_logs"] = self.risk_gateway.get_audit_logs(limit=50)
 
         return metrics
 
@@ -141,7 +154,7 @@ class PortfolioBacktestEngine:
         bar_map: Dict[str, pd.Series],
         portfolio: Portfolio
     ):
-        """组合调仓：先卖后买，释放资金"""
+        """组合调仓：先卖后买，释放资金，受实盘事前风控网关全规则穿透审计"""
         total_asset = portfolio.total_asset
 
         # 计算每个标的的目标总市值
@@ -179,10 +192,28 @@ class PortfolioBacktestEngine:
                     shares_to_sell = min(shares_needed, pos.available_shares)
 
                 if shares_to_sell > 0:
+                    # 事前风控网关穿透审查 (卖出)
+                    if self.risk_gateway:
+                        cur_holdings = {s: p.market_value for s, p in portfolio.positions.items() if p.total_shares > 0}
+                        decision = self.risk_gateway.validate_order(
+                            order_type="SELL",
+                            symbol=sym,
+                            shares=shares_to_sell,
+                            price=close_price,
+                            portfolio_total_asset=portfolio.total_asset,
+                            current_holdings=cur_holdings,
+                            market_bar=row.to_dict() if hasattr(row, "to_dict") else dict(row)
+                        )
+                        if not decision.passed:
+                            self.log(f"[{cur_date}] ⚠️ 事前风控拦截卖出: {sym} - {decision.reason}")
+                            continue
+
                     exec_price = self.cost_calc.get_execution_price(close_price, is_buy=False)
                     cost = self.cost_calc.calculate_cost(exec_price, shares_to_sell, is_buy=False)
                     trade = portfolio.sell(cur_date, sym, shares_to_sell, exec_price, cost)
                     if trade:
+                        if self.risk_gateway:
+                            self.risk_gateway.record_executed_trade("SELL", sym, shares_to_sell, exec_price)
                         self.log(f"[{cur_date}] 组合减仓: {sym} 卖出 {shares_to_sell}股 @ {exec_price:.2f}, 释放现金 CNY {trade.cash_after:.2f}")
 
         # 2. 【第二阶段：再买】处理需要建仓或增仓的标的
@@ -227,6 +258,27 @@ class PortfolioBacktestEngine:
                             continue
                         cost = self.cost_calc.calculate_cost(exec_price, shares_to_buy, is_buy=True)
 
+                    # 事前风控网关穿透审查 (买入)
+                    if self.risk_gateway:
+                        cur_holdings = {s: p.market_value for s, p in portfolio.positions.items() if p.total_shares > 0}
+                        avg_vol = float(row.get("volume", 0.0))
+                        decision = self.risk_gateway.validate_order(
+                            order_type="BUY",
+                            symbol=sym,
+                            shares=shares_to_buy,
+                            price=close_price,
+                            portfolio_total_asset=portfolio.total_asset,
+                            current_holdings=cur_holdings,
+                            market_bar=row.to_dict() if hasattr(row, "to_dict") else dict(row),
+                            avg_20d_volume=avg_vol if avg_vol > 0 else None
+                        )
+                        if not decision.passed:
+                            self.log(f"[{cur_date}] ⚠️ 事前风控拦截买入: {sym} - {decision.reason}")
+                            continue
+
                     trade = portfolio.buy(cur_date, sym, shares_to_buy, exec_price, cost)
                     if trade:
+                        if self.risk_gateway:
+                            self.risk_gateway.record_executed_trade("BUY", sym, shares_to_buy, exec_price)
                         self.log(f"[{cur_date}] 组合加仓: {sym} 买入 {shares_to_buy}股 @ {exec_price:.2f}, 费用: {cost.total_cost:.2f}")
+

@@ -24,12 +24,14 @@ from ..ml.strategy import AIMachineLearningStrategy
 from ..ml.optimizer import PortfolioOptimizer
 from ..core.attribution import PerformanceAttributor
 from ..core.stress_testing import StressTestEngine
+from ..core.risk_gateway import PreTradeRiskGateway, RiskGatewayConfig
 
 logger = logging.getLogger(__name__)
 
-
 router = APIRouter(prefix="/api")
 data_provider = MarketDataProvider()
+risk_gateway = PreTradeRiskGateway()
+
 
 STRATEGY_REGISTRY = {
     "DualMAStrategy": {
@@ -296,6 +298,31 @@ class StressTestAnalyzeRequest(BaseModel):
     start_date: str = Field(default="2023-01-01", description="行情开始日期")
     end_date: str = Field(default="2024-01-01", description="行情结束日期")
     equity_curve: Optional[List[Dict[str, Any]]] = Field(default=None, description="可选的策略实际累计净值序列")
+
+
+class RiskGatewayConfigUpdate(BaseModel):
+    max_single_order_amount: Optional[float] = None
+    max_daily_turnover: Optional[float] = None
+    max_stock_concentration: Optional[float] = None
+    max_sector_exposure: Optional[float] = None
+    cancel_window_sec: Optional[int] = None
+    max_cancel_count: Optional[int] = None
+    max_volume_ratio: Optional[float] = None
+    intraday_warn_drawdown: Optional[float] = None
+    intraday_stop_drawdown: Optional[float] = None
+    blacklist_symbols: Optional[List[str]] = None
+    enforce_price_limits: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class RiskValidateRequest(BaseModel):
+    order_type: str = Field(default="BUY", description="买卖方向 BUY 或 SELL")
+    symbol: str = Field(default="600519", description="标的代码")
+    shares: int = Field(default=100, description="申报股数")
+    price: float = Field(default=1800.0, description="申报价格")
+    portfolio_total_asset: float = Field(default=1000000.0, description="当前组合总资产")
+    current_holdings: Optional[Dict[str, float]] = Field(default_factory=dict, description="当前各标的持仓市值")
+
 
 
 
@@ -854,7 +881,8 @@ def run_ml_backtest(req: MLBacktestRequest):
         "feature_ids": req.feature_ids
     }
     strategy_instance = AIMachineLearningStrategy(params=strategy_params)
-    port_engine = PortfolioBacktestEngine(config=backtest_cfg)
+    port_engine = PortfolioBacktestEngine(config=backtest_cfg, risk_gateway=risk_gateway)
+
 
     try:
         results = port_engine.run(
@@ -1074,6 +1102,117 @@ def run_stress_test_endpoint(req: StressTestAnalyzeRequest):
     except Exception as e:
         logger.exception("压力测试分析异常")
         raise HTTPException(status_code=500, detail=f"压力测试分析异常: {str(e)}")
+
+
+@router.get("/risk_gateway/config")
+def get_risk_gateway_config():
+    """获取当前事前风控网关各项合规红线与运行配置"""
+    cfg = risk_gateway.config
+    return {
+        "code": 200,
+        "message": "获取风控网关配置成功",
+        "data": {
+            "max_single_order_amount": cfg.max_single_order_amount,
+            "max_daily_turnover": cfg.max_daily_turnover,
+            "max_stock_concentration": cfg.max_stock_concentration,
+            "max_sector_exposure": cfg.max_sector_exposure,
+            "cancel_window_sec": cfg.cancel_window_sec,
+            "max_cancel_count": cfg.max_cancel_count,
+            "max_volume_ratio": cfg.max_volume_ratio,
+            "intraday_warn_drawdown": cfg.intraday_warn_drawdown,
+            "intraday_stop_drawdown": cfg.intraday_stop_drawdown,
+            "blacklist_symbols": list(cfg.blacklist_symbols),
+            "enforce_price_limits": cfg.enforce_price_limits,
+            "is_active": cfg.is_active
+        }
+    }
+
+
+@router.post("/risk_gateway/config")
+def update_risk_gateway_config(req: RiskGatewayConfigUpdate):
+    """动态更新事前风控网关红线参数"""
+    cfg = risk_gateway.config
+    if req.max_single_order_amount is not None:
+        cfg.max_single_order_amount = req.max_single_order_amount
+    if req.max_daily_turnover is not None:
+        cfg.max_daily_turnover = req.max_daily_turnover
+    if req.max_stock_concentration is not None:
+        cfg.max_stock_concentration = req.max_stock_concentration
+    if req.max_sector_exposure is not None:
+        cfg.max_sector_exposure = req.max_sector_exposure
+    if req.cancel_window_sec is not None:
+        cfg.cancel_window_sec = req.cancel_window_sec
+    if req.max_cancel_count is not None:
+        cfg.max_cancel_count = req.max_cancel_count
+    if req.max_volume_ratio is not None:
+        cfg.max_volume_ratio = req.max_volume_ratio
+    if req.intraday_warn_drawdown is not None:
+        cfg.intraday_warn_drawdown = req.intraday_warn_drawdown
+    if req.intraday_stop_drawdown is not None:
+        cfg.intraday_stop_drawdown = req.intraday_stop_drawdown
+    if req.blacklist_symbols is not None:
+        cfg.blacklist_symbols = set(req.blacklist_symbols)
+    if req.enforce_price_limits is not None:
+        cfg.enforce_price_limits = req.enforce_price_limits
+    if req.is_active is not None:
+        cfg.is_active = req.is_active
+
+    return {
+        "code": 200,
+        "message": "风控网关配置更新成功",
+        "data": get_risk_gateway_config()["data"]
+    }
+
+
+@router.get("/risk_gateway/status")
+def get_risk_gateway_status():
+    """获取当前事前风控网关实时运行状态、熔断指标与各红线水位"""
+    return {
+        "code": 200,
+        "message": "获取风控网关运行状态成功",
+        "data": risk_gateway.get_status_summary()
+    }
+
+
+@router.post("/risk_gateway/validate")
+def validate_order_endpoint(req: RiskValidateRequest):
+    """穿透审查单笔报单，执行全套事前风控规则链检验"""
+    decision = risk_gateway.validate_order(
+        order_type=req.order_type,
+        symbol=req.symbol,
+        shares=req.shares,
+        price=req.price,
+        portfolio_total_asset=req.portfolio_total_asset,
+        current_holdings=req.current_holdings or {}
+    )
+    return {
+        "code": 200,
+        "message": "风控合规审查完成",
+        "data": decision.to_dict()
+    }
+
+
+@router.get("/risk_gateway/logs")
+def get_risk_gateway_logs(limit: int = 50):
+    """获取最近的事前风控拦截与合规审计流水"""
+    return {
+        "code": 200,
+        "message": "获取风控审计流水成功",
+        "data": risk_gateway.get_audit_logs(limit=limit)
+    }
+
+
+@router.post("/risk_gateway/reset")
+def reset_risk_gateway_status(trading_date: Optional[str] = None, initial_equity: float = 1000000.0):
+    """手动复位风控网关熔断锁仓状态与日内统计指标"""
+    t_date = trading_date or time.strftime("%Y-%m-%d")
+    risk_gateway.reset_day(t_date, initial_equity)
+    return {
+        "code": 200,
+        "message": "风控网关日内状态与熔断锁仓已成功复位",
+        "data": risk_gateway.get_status_summary()
+    }
+
 
 
 

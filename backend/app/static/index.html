@@ -1060,7 +1060,12 @@
               <span class="btn-icon">🛡️</span>
               <span>执行黑天鹅情景压力测试</span>
             </button>
+            <button type="button" id="ml-risk-gateway-btn" class="chip-btn primary ml-risk-btn">
+              <span class="btn-icon">⚡</span>
+              <span>实盘事前风控网关</span>
+            </button>
             <div id="ml-status-text" class="ml-status-text">
+
 
               <span class="status-dot green"></span>
               <span>就绪：准备开始时序滚动训练与组合权重优化</span>
@@ -1388,7 +1393,192 @@
         </div>
       </div>
 
+      <!-- 实盘交易事前风控网关与动态合规拦截器卡片 -->
+      <div id="ml-risk-gateway-section" class="card-box ml-risk-card" style="display: none; margin-bottom: 20px;">
+        <div class="card-header-row">
+          <div>
+            <h4 style="margin: 0; font-size: 15px; font-weight: 600; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+              <span>⚡ 实盘交易事前风控网关与动态合规拦截器 (Pre-Trade Risk Gateway)</span>
+              <span class="badge-tag green" id="ml-risk-status-badge">🟢 网关实时守护中</span>
+            </h4>
+            <div style="font-size: 12px; color: #64748b; margin-top: 4px;">
+              所有报单在进入撮合引擎或交易所前毫秒级全规则穿透：单笔超限、日累计换手率、个股集中度红线、单一行业敞口、高频防幌骗撤单监控、流动性冲击及日内动态硬回撤熔断
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button type="button" id="ml-risk-toggle-btn" class="chip-btn" style="font-size: 12px; padding: 4px 10px;">
+              <span>🛡️ 风控总开关: 开</span>
+            </button>
+            <button type="button" id="ml-risk-reset-btn" class="chip-btn" style="font-size: 12px; padding: 4px 10px;">
+              <span>🔄 复位熔断状态</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 4 项风控监控核心 KPI 看板 -->
+        <div class="attrib-kpi-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 14px;">
+          <div class="metric-card mini">
+            <div class="metric-label">今日累计交易额 / 额度上限</div>
+            <div class="metric-value-row">
+              <span id="ml-risk-kpi-turnover" class="metric-value text-blue" style="font-size: 18px;">¥0.00</span>
+            </div>
+            <div class="metric-footer" style="display: flex; justify-content: space-between;">
+              <span id="ml-risk-kpi-turnover-limit">限额: ¥3,000,000</span>
+              <span id="ml-risk-kpi-turnover-pct" class="metric-sub" style="color: #38bdf8;">0.0%</span>
+            </div>
+          </div>
+
+          <div class="metric-card mini">
+            <div class="metric-label">日内动态回撤 / 熔断红线</div>
+            <div class="metric-value-row">
+              <span id="ml-risk-kpi-drawdown" class="metric-value text-emerald" style="font-size: 18px;">0.00%</span>
+            </div>
+            <div class="metric-footer" style="display: flex; justify-content: space-between;">
+              <span>预警 -2.5% | 熔断 -4.0%</span>
+              <span id="ml-risk-kpi-drawdown-status" class="metric-sub text-emerald">正常</span>
+            </div>
+          </div>
+
+          <div class="metric-card mini">
+            <div class="metric-label">违规拦截次数 / 审查总笔数</div>
+            <div class="metric-value-row">
+              <span id="ml-risk-kpi-intercepted" class="metric-value text-amber" style="font-size: 18px;">0 笔</span>
+            </div>
+            <div class="metric-footer" style="display: flex; justify-content: space-between;">
+              <span id="ml-risk-kpi-total-val">审查总量: 0 笔</span>
+              <span class="metric-sub">实时阻断</span>
+            </div>
+          </div>
+
+          <div class="metric-card mini">
+            <div class="metric-label">单笔申报与集中度硬红线</div>
+            <div class="metric-value-row">
+              <span id="ml-risk-kpi-single-limit" class="metric-value text-main" style="font-size: 18px;">¥50.0 万</span>
+            </div>
+            <div class="metric-footer" style="display: flex; justify-content: space-between;">
+              <span>个股 ≤ 30% | 行业 ≤ 50%</span>
+              <span class="metric-sub" style="color: #10b981;">硬约束</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 两栏网格: 单笔试算沙盘 + 红线阈值微调 -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+          <!-- 左侧: 报单穿透试算沙盘 -->
+          <div class="chart-box-inner" style="background: rgba(15, 23, 42, 0.5); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 14px;">
+            <div style="font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 12px; display: flex; justify-content: space-between;">
+              <span>🧪 单笔委托事前风控穿透试算沙盘</span>
+              <span style="font-size: 11px; color: #94a3b8;">模拟报单校验</span>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+              <div>
+                <label style="font-size: 11px; color: #94a3b8;">买卖方向</label>
+                <select id="ml-risk-sim-action" class="form-input" style="width: 100%; margin-top: 4px; padding: 6px 10px; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: #f8fafc;">
+                  <option value="BUY">买入开仓 (BUY)</option>
+                  <option value="SELL">卖出平仓 (SELL)</option>
+                </select>
+              </div>
+              <div>
+                <label style="font-size: 11px; color: #94a3b8;">标的代码</label>
+                <input type="text" id="ml-risk-sim-symbol" value="sh.600519" class="form-input" style="width: 100%; margin-top: 4px; padding: 6px 10px; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: #f8fafc;" />
+              </div>
+              <div>
+                <label style="font-size: 11px; color: #94a3b8;">申报价格 (¥)</label>
+                <input type="number" id="ml-risk-sim-price" value="1800.0" step="0.1" class="form-input" style="width: 100%; margin-top: 4px; padding: 6px 10px; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: #f8fafc;" />
+              </div>
+              <div>
+                <label style="font-size: 11px; color: #94a3b8;">申报股数 (股)</label>
+                <input type="number" id="ml-risk-sim-shares" value="100" step="100" class="form-input" style="width: 100%; margin-top: 4px; padding: 6px 10px; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: #f8fafc;" />
+              </div>
+            </div>
+            <div style="margin-top: 12px; display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 12px; color: #94a3b8;">申报预估金额: <strong id="ml-risk-sim-amount" style="color: #f8fafc; font-family: var(--font-mono);">¥180,000.00</strong></span>
+              <button type="button" id="ml-risk-validate-btn" class="chip-btn primary" style="padding: 6px 16px; font-size: 12px;">
+                <span>🚀 穿透审查此单</span>
+              </button>
+            </div>
+            <!-- 试算结果卡片 -->
+            <div id="ml-risk-result-box" style="margin-top: 12px; padding: 10px 14px; border-radius: 6px; background: rgba(30, 41, 59, 0.4); border-left: 3px solid #10b981; font-size: 12px; color: #cbd5e1;">
+              <div style="font-weight: 600; color: #10b981;" id="ml-risk-result-title">等待审查输入...</div>
+              <div style="margin-top: 4px; color: #94a3b8;" id="ml-risk-result-desc">在上方输入申报参数后点击【穿透审查此单】即可模拟事前拦截测试。</div>
+            </div>
+          </div>
+
+          <!-- 右侧: 风控合规红线参数动态配置 -->
+          <div class="chart-box-inner" style="background: rgba(15, 23, 42, 0.5); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 14px;">
+            <div style="font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 12px; display: flex; justify-content: space-between;">
+              <span>⚙️ 机构事前风控合规红线在线微调</span>
+              <span style="font-size: 11px; color: #94a3b8;">动态热生效</span>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+              <div>
+                <label style="font-size: 11px; color: #94a3b8;">单笔申报限额 (万元)</label>
+                <input type="number" id="ml-cfg-single-amount" value="50" step="5" class="form-input" style="width: 100%; margin-top: 4px; padding: 6px 10px; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: #f8fafc;" />
+              </div>
+              <div>
+                <label style="font-size: 11px; color: #94a3b8;">单日换手累计限额 (万元)</label>
+                <input type="number" id="ml-cfg-daily-turnover" value="300" step="50" class="form-input" style="width: 100%; margin-top: 4px; padding: 6px 10px; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: #f8fafc;" />
+              </div>
+              <div>
+                <label style="font-size: 11px; color: #94a3b8;">个股集中度上限 (%)</label>
+                <input type="number" id="ml-cfg-stock-conc" value="30" step="5" min="5" max="100" class="form-input" style="width: 100%; margin-top: 4px; padding: 6px 10px; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: #f8fafc;" />
+              </div>
+              <div>
+                <label style="font-size: 11px; color: #94a3b8;">单一行业敞口上限 (%)</label>
+                <input type="number" id="ml-cfg-sector-exp" value="50" step="5" min="10" max="100" class="form-input" style="width: 100%; margin-top: 4px; padding: 6px 10px; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: #f8fafc;" />
+              </div>
+              <div>
+                <label style="font-size: 11px; color: #94a3b8;">60秒最大撤单次数</label>
+                <input type="number" id="ml-cfg-cancel-count" value="5" step="1" min="1" max="50" class="form-input" style="width: 100%; margin-top: 4px; padding: 6px 10px; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: #f8fafc;" />
+              </div>
+              <div>
+                <label style="font-size: 11px; color: #94a3b8;">日内硬熔断深度 (%)</label>
+                <input type="number" id="ml-cfg-stop-drawdown" value="4.0" step="0.5" min="1" max="20" class="form-input" style="width: 100%; margin-top: 4px; padding: 6px 10px; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: #f8fafc;" />
+              </div>
+            </div>
+            <div style="margin-top: 8px;">
+              <label style="font-size: 11px; color: #94a3b8;">禁买黑名单标的 (逗号隔开)</label>
+              <input type="text" id="ml-cfg-blacklist" placeholder="sh.600000, sz.000002" class="form-input" style="width: 100%; margin-top: 4px; padding: 6px 10px; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: #f8fafc;" />
+            </div>
+            <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
+              <button type="button" id="ml-risk-save-cfg-btn" class="chip-btn primary" style="padding: 6px 16px; font-size: 12px;">
+                <span>💾 保存并热更新风控参数</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部表格: 事前风控拦截与合规审计流水 -->
+        <div class="table-wrapper" style="margin-top: 18px; border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; overflow: hidden;">
+          <div style="padding: 10px 14px; background: rgba(15, 23, 42, 0.7); font-size: 13px; font-weight: 600; color: #e2e8f0; display: flex; justify-content: space-between;">
+            <span>📋 事前风控毫秒级穿透审计流水记录 (Pre-Trade Audit Trail)</span>
+            <button type="button" id="ml-risk-refresh-logs-btn" style="background: transparent; border: none; color: #38bdf8; font-size: 11px; cursor: pointer;">
+              🔄 刷新流水
+            </button>
+          </div>
+          <table class="data-table" style="margin: 0;">
+            <thead>
+              <tr>
+                <th style="width: 140px;">时间戳</th>
+                <th style="width: 90px;">标的代码</th>
+                <th style="width: 70px;">方向</th>
+                <th>申报股数</th>
+                <th>申报现价</th>
+                <th>申报总额</th>
+                <th style="width: 100px;">审查结果</th>
+                <th style="width: 140px;">合规规则 ID</th>
+                <th>处置原因与偏离值</th>
+              </tr>
+            </thead>
+            <tbody id="ml-risk-logs-table-body">
+              <tr><td colspan="9" class="empty-cell">暂无风控拦截流水记录</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- 底部两栏明细表 -->
+
 
       <div class="ml-bottom-grid">
         <!-- 左卡片: 最新截面 AI 评分预测榜 -->

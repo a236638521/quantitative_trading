@@ -5,6 +5,7 @@ from .metrics import MetricsCalculator
 from .engine import BacktestEngine
 from .portfolio_engine import PortfolioBacktestEngine
 from .stress_testing import StressTestEngine, HISTORICAL_SCENARIOS
+from .risk_gateway import PreTradeRiskGateway, RiskGatewayConfig, RiskDecision, RiskRuleId, RiskAction
 
 __all__ = [
     "PerformanceAttributor",
@@ -15,6 +16,12 @@ __all__ = [
     "BacktestEngine",
     "PortfolioBacktestEngine",
     "StressTestEngine",
-    "HISTORICAL_SCENARIOS"
+    "HISTORICAL_SCENARIOS",
+    "PreTradeRiskGateway",
+    "RiskGatewayConfig",
+    "RiskDecision",
+    "RiskRuleId",
+    "RiskAction"
 ]
+
 

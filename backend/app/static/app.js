@@ -2537,10 +2537,15 @@ function initML() {
     stressBtn.addEventListener('click', runStressTestAnalysis);
   }
 
-  const stressRerunBtn = document.getElementById('ml-stress-rerun-btn');
-  if (stressRerunBtn) {
-    stressRerunBtn.addEventListener('click', runStressTestAnalysis);
+  // 触发事前风控网关面板展开按键
+  const riskBtn = document.getElementById('ml-risk-gateway-btn');
+  if (riskBtn) {
+    riskBtn.addEventListener('click', toggleRiskGatewaySection);
   }
+
+  // 绑定事前风控网关各交互按键
+  initRiskGatewayEvents();
+
 
 
   // 同步优化模型权重按键
@@ -4631,5 +4636,360 @@ async function runStressTestAnalysis() {
     if (stressRerunBtn) stressRerunBtn.disabled = false;
   }
 }
+
+// ==========================================================================
+// 实盘交易事前风控网关与动态合规拦截器控制台前端交互函数
+// ==========================================================================
+
+function toggleRiskGatewaySection() {
+  const section = document.getElementById('ml-risk-gateway-section');
+  if (!section) return;
+
+  const isHidden = section.style.display === 'none' || !section.style.display;
+  section.style.display = isHidden ? 'block' : 'none';
+
+  if (isHidden) {
+    fetchRiskGatewayStatus();
+    fetchRiskGatewayConfig();
+    fetchRiskGatewayLogs();
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function initRiskGatewayEvents() {
+  // 联动计算沙盘预估金额
+  const priceInput = document.getElementById('ml-risk-sim-price');
+  const sharesInput = document.getElementById('ml-risk-sim-shares');
+  const amountEl = document.getElementById('ml-risk-sim-amount');
+
+  function updateSimAmount() {
+    if (!priceInput || !sharesInput || !amountEl) return;
+    const p = parseFloat(priceInput.value) || 0;
+    const s = parseInt(sharesInput.value, 10) || 0;
+    amountEl.textContent = `¥${(p * s).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+
+  if (priceInput) priceInput.addEventListener('input', updateSimAmount);
+  if (sharesInput) sharesInput.addEventListener('input', updateSimAmount);
+
+  // 绑定穿透试算按键
+  const valBtn = document.getElementById('ml-risk-validate-btn');
+  if (valBtn) valBtn.addEventListener('click', validateSimOrder);
+
+  // 绑定保存配置按键
+  const saveBtn = document.getElementById('ml-risk-save-cfg-btn');
+  if (saveBtn) saveBtn.addEventListener('click', saveRiskGatewayConfig);
+
+  // 绑定状态复位按键
+  const resetBtn = document.getElementById('ml-risk-reset-btn');
+  if (resetBtn) resetBtn.addEventListener('click', resetRiskGateway);
+
+  // 绑定风控开关按键
+  const toggleBtn = document.getElementById('ml-risk-toggle-btn');
+  if (toggleBtn) toggleBtn.addEventListener('click', toggleRiskGatewayActive);
+
+  // 绑定刷新流水按键
+  const refreshLogsBtn = document.getElementById('ml-risk-refresh-logs-btn');
+  if (refreshLogsBtn) refreshLogsBtn.addEventListener('click', fetchRiskGatewayLogs);
+}
+
+async function fetchRiskGatewayStatus() {
+  try {
+    const resp = await fetch('/api/risk_gateway/status');
+    const res = await resp.json();
+    if (res.code !== 200 || !res.data) return;
+
+    const data = res.data;
+    const badge = document.getElementById('ml-risk-status-badge');
+    const toggleBtn = document.getElementById('ml-risk-toggle-btn');
+
+    if (badge) {
+      if (!data.is_active) {
+        badge.className = 'badge-tag yellow';
+        badge.textContent = '🟡 风控网关已旁路关闭';
+      } else if (data.is_circuit_broken) {
+        badge.className = 'badge-tag red';
+        badge.textContent = `🔴 触发硬熔断锁仓: ${data.circuit_break_reason || '日内回撤超限'}`;
+      } else {
+        badge.className = 'badge-tag green';
+        badge.textContent = '🟢 网关实时守护中 (8 项全规则生效)';
+      }
+    }
+
+    if (toggleBtn) {
+      toggleBtn.innerHTML = `<span>🛡️ 风控总开关: ${data.is_active ? '开' : '关'}</span>`;
+      toggleBtn.style.borderColor = data.is_active ? 'rgba(16, 185, 129, 0.4)' : 'rgba(245, 158, 11, 0.4)';
+    }
+
+    // 填充 4 项 KPI
+    const to = data.daily_turnover || {};
+    const turnoverEl = document.getElementById('ml-risk-kpi-turnover');
+    if (turnoverEl) {
+      turnoverEl.textContent = `¥${(to.total_turnover || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+
+    const turnoverLimitEl = document.getElementById('ml-risk-kpi-turnover-limit');
+    if (turnoverLimitEl) {
+      turnoverLimitEl.textContent = `限额: ¥${(to.max_limit || 0).toLocaleString('zh-CN')}`;
+    }
+
+    const turnoverPctEl = document.getElementById('ml-risk-kpi-turnover-pct');
+    if (turnoverPctEl) {
+      turnoverPctEl.textContent = `${to.usage_pct || 0}%`;
+    }
+
+    const dd = data.intraday_drawdown || {};
+    const ddEl = document.getElementById('ml-risk-kpi-drawdown');
+    if (ddEl) {
+      ddEl.textContent = `${(dd.drawdown_pct || 0).toFixed(2)}%`;
+      ddEl.className = `metric-value ${dd.drawdown_pct <= dd.stop_threshold_pct ? 'text-rose' : (dd.drawdown_pct <= dd.warn_threshold_pct ? 'text-amber' : 'text-emerald')}`;
+    }
+
+    const ddStatusEl = document.getElementById('ml-risk-kpi-drawdown-status');
+    if (ddStatusEl) {
+      if (dd.drawdown_pct <= dd.stop_threshold_pct) {
+        ddStatusEl.textContent = '硬熔断';
+        ddStatusEl.className = 'metric-sub text-rose';
+      } else if (dd.drawdown_pct <= dd.warn_threshold_pct) {
+        ddStatusEl.textContent = '警戒中';
+        ddStatusEl.className = 'metric-sub text-amber';
+      } else {
+        ddStatusEl.textContent = '正常';
+        ddStatusEl.className = 'metric-sub text-emerald';
+      }
+    }
+
+    const interceptedEl = document.getElementById('ml-risk-kpi-intercepted');
+    if (interceptedEl) {
+      interceptedEl.textContent = `${data.intercepted_count || 0} 笔`;
+    }
+
+    const totalValEl = document.getElementById('ml-risk-kpi-total-val');
+    if (totalValEl) {
+      totalValEl.textContent = `审查总量: ${data.total_validated_count || 0} 笔`;
+    }
+
+    const singleLimitEl = document.getElementById('ml-risk-kpi-single-limit');
+    if (singleLimitEl && data.limits) {
+      singleLimitEl.textContent = `¥${((data.limits.max_single_order_amount || 0) / 10000).toFixed(1)} 万`;
+    }
+  } catch (err) {
+    console.error('获取风控网关状态失败:', err);
+  }
+}
+
+async function fetchRiskGatewayConfig() {
+  try {
+    const resp = await fetch('/api/risk_gateway/config');
+    const res = await resp.json();
+    if (res.code !== 200 || !res.data) return;
+
+    const cfg = res.data;
+    const singleInput = document.getElementById('ml-cfg-single-amount');
+    if (singleInput) singleInput.value = (cfg.max_single_order_amount / 10000).toFixed(0);
+
+    const turnoverInput = document.getElementById('ml-cfg-daily-turnover');
+    if (turnoverInput) turnoverInput.value = (cfg.max_daily_turnover / 10000).toFixed(0);
+
+    const stockConcInput = document.getElementById('ml-cfg-stock-conc');
+    if (stockConcInput) stockConcInput.value = (cfg.max_stock_concentration * 100).toFixed(0);
+
+    const sectorExpInput = document.getElementById('ml-cfg-sector-exp');
+    if (sectorExpInput) sectorExpInput.value = (cfg.max_sector_exposure * 100).toFixed(0);
+
+    const cancelInput = document.getElementById('ml-cfg-cancel-count');
+    if (cancelInput) cancelInput.value = cfg.max_cancel_count;
+
+    const stopDdInput = document.getElementById('ml-cfg-stop-drawdown');
+    if (stopDdInput) stopDdInput.value = Math.abs(cfg.intraday_stop_drawdown * 100).toFixed(1);
+
+    const blInput = document.getElementById('ml-cfg-blacklist');
+    if (blInput) blInput.value = (cfg.blacklist_symbols || []).join(', ');
+  } catch (err) {
+    console.error('获取风控网关配置失败:', err);
+  }
+}
+
+async function fetchRiskGatewayLogs() {
+  try {
+    const resp = await fetch('/api/risk_gateway/logs?limit=30');
+    const res = await resp.json();
+    if (res.code !== 200 || !res.data) return;
+
+    const tbody = document.getElementById('ml-risk-logs-table-body');
+    if (!tbody) return;
+
+    const logs = res.data;
+    if (logs.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="9" class="empty-cell">暂无风控拦截流水记录</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = '';
+    // 按时间倒序展示
+    logs.slice().reverse().forEach(l => {
+      const tr = document.createElement('tr');
+
+      let badgeHtml = '<span class="risk-pass-badge">PASS 放行</span>';
+      if (l.decision === 'REJECT') {
+        badgeHtml = '<span class="risk-reject-badge">REJECT 拦截</span>';
+      } else if (l.decision === 'CIRCUIT_BREAK') {
+        badgeHtml = '<span class="risk-circuit-badge">CIRCUIT 熔断</span>';
+      }
+
+      const actionColor = l.action === 'BUY' ? '#38bdf8' : '#f59e0b';
+
+      tr.innerHTML = `
+        <td style="font-family:var(--font-mono);font-size:11px;color:#94a3b8;">${l.timestamp}</td>
+        <td><strong>${l.symbol}</strong></td>
+        <td style="color:${actionColor};font-weight:600;">${l.action}</td>
+        <td style="font-family:var(--font-mono);">${l.shares.toLocaleString()} 股</td>
+        <td style="font-family:var(--font-mono);color:#cbd5e1;">¥${l.price.toFixed(2)}</td>
+        <td style="font-family:var(--font-mono);font-weight:600;">¥${l.amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</td>
+        <td>${badgeHtml}</td>
+        <td style="font-family:var(--font-mono);font-size:11px;color:#cbd5e1;">${l.rule_id || '--'}</td>
+        <td style="font-size:12px;color:${l.passed ? '#94a3b8' : '#fb7185'};">${l.reason}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  } catch (err) {
+    console.error('获取风控拦截流水失败:', err);
+  }
+}
+
+async function validateSimOrder() {
+  const action = document.getElementById('ml-risk-sim-action').value || 'BUY';
+  const symbol = (document.getElementById('ml-risk-sim-symbol').value || '').trim();
+  const price = parseFloat(document.getElementById('ml-risk-sim-price').value) || 0;
+  const shares = parseInt(document.getElementById('ml-risk-sim-shares').value, 10) || 0;
+
+  if (!symbol || price <= 0 || shares <= 0) {
+    alert('请输入有效的标的代码、价格和股数！');
+    return;
+  }
+
+  const resultBox = document.getElementById('ml-risk-result-box');
+  const resultTitle = document.getElementById('ml-risk-result-title');
+  const resultDesc = document.getElementById('ml-risk-result-desc');
+
+  try {
+    const resp = await fetch('/api/risk_gateway/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        order_type: action,
+        symbol: symbol,
+        shares: shares,
+        price: price,
+        portfolio_total_asset: 1000000.0,
+        current_holdings: {}
+      })
+    });
+
+    const res = await resp.json();
+    if (res.code !== 200 || !res.data) {
+      throw new Error(res.detail || res.message || '风控审查接口异常');
+    }
+
+    const d = res.data;
+    if (d.passed) {
+      resultBox.style.borderLeftColor = '#10b981';
+      resultBox.style.background = 'rgba(16, 185, 129, 0.08)';
+      resultTitle.style.color = '#34d399';
+      resultTitle.innerHTML = `✅ [PASS 放行] 全套事前合规校验通过`;
+      resultDesc.innerHTML = `${d.reason} (单笔金额: ¥${(d.details?.order_amount || 0).toLocaleString()})`;
+    } else {
+      resultBox.style.borderLeftColor = '#f43f5e';
+      resultBox.style.background = 'rgba(244, 63, 94, 0.08)';
+      resultTitle.style.color = '#fb7185';
+      resultTitle.innerHTML = `❌ [${d.action} 拦截拒绝] 触发合规规则: ${d.rule_id}`;
+      resultDesc.innerHTML = `<strong style="color:#ffffff;">拦截处置原因:</strong> ${d.reason}`;
+    }
+
+    // 重新拉取流水与状态
+    fetchRiskGatewayStatus();
+    fetchRiskGatewayLogs();
+  } catch (err) {
+    console.error('穿透试算失败:', err);
+    alert(`穿透试算异常: ${err.message}`);
+  }
+}
+
+async function saveRiskGatewayConfig() {
+  const singleAmount = parseFloat(document.getElementById('ml-cfg-single-amount').value) * 10000;
+  const dailyTurnover = parseFloat(document.getElementById('ml-cfg-daily-turnover').value) * 10000;
+  const stockConc = parseFloat(document.getElementById('ml-cfg-stock-conc').value) / 100;
+  const sectorExp = parseFloat(document.getElementById('ml-cfg-sector-exp').value) / 100;
+  const cancelCount = parseInt(document.getElementById('ml-cfg-cancel-count').value, 10);
+  const stopDd = -Math.abs(parseFloat(document.getElementById('ml-cfg-stop-drawdown').value) / 100);
+  const blacklistRaw = document.getElementById('ml-cfg-blacklist').value || '';
+  const blacklist = blacklistRaw.split(',').map(s => s.trim()).filter(Boolean);
+
+  try {
+    const resp = await fetch('/api/risk_gateway/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        max_single_order_amount: singleAmount,
+        max_daily_turnover: dailyTurnover,
+        max_stock_concentration: stockConc,
+        max_sector_exposure: sectorExp,
+        max_cancel_count: cancelCount,
+        intraday_stop_drawdown: stopDd,
+        blacklist_symbols: blacklist
+      })
+    });
+
+    const res = await resp.json();
+    if (res.code !== 200) {
+      throw new Error(res.detail || res.message || '保存风控配置失败');
+    }
+
+    alert('✅ 事前风控网关各项红线参数已成功热更新生效！');
+    fetchRiskGatewayStatus();
+  } catch (err) {
+    console.error('保存风控配置失败:', err);
+    alert(`保存风控配置失败: ${err.message}`);
+  }
+}
+
+async function resetRiskGateway() {
+  if (!confirm('确认要手动复位事前风控网关的日内熔断锁仓状态与累计额度吗？')) return;
+
+  try {
+    const resp = await fetch('/api/risk_gateway/reset', { method: 'POST' });
+    const res = await resp.json();
+    if (res.code !== 200) {
+      throw new Error(res.detail || res.message || '复位失败');
+    }
+    alert('✅ 风控网关熔断锁仓与日内统计指标已成功复位！');
+    fetchRiskGatewayStatus();
+    fetchRiskGatewayLogs();
+  } catch (err) {
+    console.error('复位风控失败:', err);
+    alert(`复位失败: ${err.message}`);
+  }
+}
+
+async function toggleRiskGatewayActive() {
+  try {
+    const statResp = await fetch('/api/risk_gateway/status');
+    const statRes = await statResp.json();
+    const curActive = statRes.data?.is_active ?? true;
+
+    const resp = await fetch('/api/risk_gateway/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_active: !curActive })
+    });
+    const res = await resp.json();
+    if (res.code !== 200) throw new Error(res.message);
+
+    fetchRiskGatewayStatus();
+  } catch (err) {
+    console.error('切换风控开关失败:', err);
+  }
+}
+
 
 
