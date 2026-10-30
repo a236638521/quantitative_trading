@@ -2402,12 +2402,16 @@ const mlState = {
   selectedFeatures: new Set(),
   activeTab: 'equity',
   chart: null,
+  waterfallChart: null,
+  radarChart: null,
   trainResult: null,
   backtestResult: null,
   optimizerResult: null,
+  attributionResult: null,
   selectedOptModel: 'risk_parity',
   isRunning: false,
-  isOptimizing: false
+  isOptimizing: false,
+  isAttributing: false
 };
 
 function initML() {
@@ -2496,6 +2500,7 @@ function initML() {
         else if (mlState.activeTab === 'ic') descEl.textContent = '严格 Walk-Forward 时序滚动样本外测试折的截面 Rank-IC 跟踪序列';
         else if (mlState.activeTab === 'drawdown') descEl.textContent = 'AI 多因子组合历次动态水下回撤曲线及最大回撤深度';
         else if (mlState.activeTab === 'frontier') descEl.textContent = '马科维茨均值-方差有效前沿曲线、250点蒙特卡洛模拟散点云与四大经典配置模型定位';
+        else if (mlState.activeTab === 'attribution') descEl.textContent = 'Brinson-Fachler 行业多期累计业绩归因演化曲线（行业配置效应 + 选股Alpha效应 + 交互协同效应）';
       }
 
       renderMLChart();
@@ -2512,6 +2517,12 @@ function initML() {
   const optBtn = document.getElementById('ml-optimizer-btn');
   if (optBtn) {
     optBtn.addEventListener('click', runOptimizerAnalysis);
+  }
+
+  // 触发业绩归因与风格暴露测算按键
+  const attribBtn = document.getElementById('ml-attribution-btn');
+  if (attribBtn) {
+    attribBtn.addEventListener('click', runAttributionAnalysis);
   }
 
   // 同步优化模型权重按键
@@ -2686,6 +2697,10 @@ async function runMLPipeline() {
     renderMLRecommendations(mlState.trainResult.latest_predictions);
     renderMLTrades(mlState.backtestResult.trades);
     renderMLChart();
+
+    if (mlState.backtestResult.attribution) {
+      renderAttribution(mlState.backtestResult.attribution);
+    }
 
     const sum = mlState.backtestResult.summary || {};
     const tr = (sum.total_return * 100).toFixed(2);
@@ -3339,6 +3354,113 @@ function renderMLChart() {
       ]
     };
     mlState.chart.setOption(option, true);
+  } else if (mlState.activeTab === 'attribution') {
+    if (!mlState.attributionResult) {
+      mlState.chart.clear();
+      return;
+    }
+    const attrib = mlState.attributionResult;
+    const cumCurves = attrib.cumulative_curves || [];
+    const dates = cumCurves.map(c => c.date);
+    const cumExcess = cumCurves.map(c => c.cum_excess);
+    const cumAlloc = cumCurves.map(c => c.cum_allocation);
+    const cumSelect = cumCurves.map(c => c.cum_selection);
+    const cumInter = cumCurves.map(c => c.cum_interaction);
+
+    const option = {
+      backgroundColor: 'transparent',
+      title: {
+        text: 'Brinson-Fachler 行业多期累计业绩归因演化曲线',
+        subtext: '累计超额收益 = 累计行业配置效应 (Allocation) + 累计选股效应 (Selection) + 累计交互效应 (Interaction)',
+        left: 20,
+        top: 10,
+        textStyle: { color: '#f8fafc', fontSize: 13, fontWeight: 600 },
+        subtextStyle: { color: '#64748b', fontSize: 11 }
+      },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(17, 22, 34, 0.95)',
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        textStyle: { color: '#f8fafc', fontSize: 12 },
+        formatter: function (params) {
+          let tip = `<div style="font-weight:600;margin-bottom:6px;">${params[0].axisValue}</div>`;
+          params.forEach(p => {
+            const colorDot = `<span style="display:inline-block;margin-right:6px;border-radius:10px;width:9px;height:9px;background-color:${p.color};"></span>`;
+            const val = parseFloat(p.value);
+            const valStr = `${val >= 0 ? '+' : ''}${val.toFixed(2)}%`;
+            tip += `<div>${colorDot} ${p.seriesName}: <b>${valStr}</b></div>`;
+          });
+          return tip;
+        }
+      },
+      legend: {
+        data: ['累计超额收益 (Total Excess)', '行业配置效应 (Allocation)', '个股选择效应 (Selection)', '交互协同效应 (Interaction)'],
+        textStyle: { color: '#94a3b8', fontSize: 11 },
+        top: 10,
+        right: 20
+      },
+      grid: { left: '3%', right: '4%', top: '16%', bottom: '14%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+        axisLabel: { color: '#64748b', fontSize: 11 }
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { color: '#64748b', fontSize: 11, formatter: '{value}%' },
+        splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+      },
+      dataZoom: [
+        { type: 'slider', show: true, bottom: 5, height: 18, fillerColor: 'rgba(6, 182, 212, 0.15)' },
+        { type: 'inside' }
+      ],
+      series: [
+        {
+          name: '累计超额收益 (Total Excess)',
+          type: 'line',
+          data: cumExcess,
+          smooth: true,
+          showSymbol: false,
+          itemStyle: { color: '#22d3ee' },
+          lineStyle: { width: 3, color: '#22d3ee' },
+          areaStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: 'rgba(34, 211, 238, 0.25)' },
+              { offset: 1, color: 'rgba(34, 211, 238, 0.00)' }
+            ])
+          }
+        },
+        {
+          name: '行业配置效应 (Allocation)',
+          type: 'line',
+          data: cumAlloc,
+          smooth: true,
+          showSymbol: false,
+          itemStyle: { color: '#fbbf24' },
+          lineStyle: { width: 2, color: '#fbbf24' }
+        },
+        {
+          name: '个股选择效应 (Selection)',
+          type: 'line',
+          data: cumSelect,
+          smooth: true,
+          showSymbol: false,
+          itemStyle: { color: '#34d399' },
+          lineStyle: { width: 2, color: '#34d399' }
+        },
+        {
+          name: '交互协同效应 (Interaction)',
+          type: 'line',
+          data: cumInter,
+          smooth: true,
+          showSymbol: false,
+          itemStyle: { color: '#a78bfa' },
+          lineStyle: { width: 1.5, type: 'dashed', color: '#a78bfa' }
+        }
+      ]
+    };
+    mlState.chart.setOption(option, true);
   }
 }
 
@@ -3582,3 +3704,366 @@ function applySelectedOptimizerModel() {
     alert(`已成功将【${modelNames[selectedKey] || selectedKey}】同步至回测配置的“仓位分配模型”！\n点击【训练 AI 模型并运行全真组合回测】即可按该优化权重运行回测。`);
   }
 }
+
+// ==========================================================================
+// Brinson 业绩归因与 Barra 多因子风格暴露相关处理函数
+// ==========================================================================
+
+function renderAttribution(data) {
+  if (!data) return;
+  mlState.attributionResult = data;
+
+  const section = document.getElementById('ml-attribution-section');
+  if (section) section.style.display = 'block';
+
+  // 1. 定性诊断与风格 Badge
+  const diag = data.style_exposure ? data.style_exposure.diagnosis : {};
+  const badgeEl = document.getElementById('ml-style-diagnosis-badge');
+  if (badgeEl && diag.style_label) {
+    badgeEl.textContent = `风格定位: ${diag.style_label}`;
+  }
+  const boxEl = document.getElementById('ml-style-diagnosis-box');
+  if (boxEl && diag.analysis_text) {
+    boxEl.innerHTML = `<strong>💡 组合风格与业绩归因核心结论:</strong> ${diag.analysis_text}`;
+  }
+
+  // 2. 行业明细表
+  renderAttributionTable(data.sector_attribution);
+
+  // 3. 瀑布图
+  renderWaterfallChart(data.waterfall);
+
+  // 4. 风格雷达图
+  renderRadarChart(data.style_exposure);
+}
+
+function renderWaterfallChart(waterfallData) {
+  const chartEl = document.getElementById('ml-waterfall-chart');
+  if (!chartEl) return;
+  if (!mlState.waterfallChart) {
+    mlState.waterfallChart = echarts.init(chartEl);
+    window.addEventListener('resize', () => {
+      mlState.waterfallChart && mlState.waterfallChart.resize();
+    });
+  }
+
+  if (!waterfallData || waterfallData.length === 0) {
+    mlState.waterfallChart.clear();
+    return;
+  }
+
+  const names = waterfallData.map(w => w.name);
+  const placeholder = [];
+  let runningTotal = 0;
+
+  for (let i = 0; i < waterfallData.length; i++) {
+    const item = waterfallData[i];
+    const val = item.value;
+    if (i === 0) {
+      placeholder.push(val >= 0 ? 0 : val);
+      runningTotal = val;
+    } else if (i === waterfallData.length - 1) {
+      placeholder.push(val >= 0 ? 0 : val);
+    } else {
+      if (val >= 0) {
+        placeholder.push(runningTotal);
+        runningTotal += val;
+      } else {
+        runningTotal += val;
+        placeholder.push(runningTotal);
+      }
+    }
+  }
+
+  const barData = waterfallData.map((w) => {
+    let color = '#38bdf8';
+    if (w.type === 'base') color = '#64748b';
+    else if (w.type === 'increment') color = '#34d399';
+    else if (w.type === 'decrement') color = '#f43f5e';
+    else if (w.type === 'drag') color = '#fb7185';
+    else if (w.type === 'total') color = '#818cf8';
+
+    return {
+      name: w.name,
+      value: Math.abs(w.value),
+      itemStyle: { color: color, borderRadius: 3 }
+    };
+  });
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      backgroundColor: 'rgba(17, 22, 34, 0.95)',
+      borderColor: 'rgba(255, 255, 255, 0.1)',
+      textStyle: { color: '#f8fafc', fontSize: 12 },
+      formatter: function (params) {
+        const item = waterfallData[params[1].dataIndex];
+        return `
+          <div style="font-weight:600;margin-bottom:4px;">${item.name}</div>
+          <div>收益贡献: <b style="color:${item.value >= 0 ? '#34d399' : '#f43f5e'};">${item.value > 0 ? '+' : ''}${item.value}%</b></div>
+          <div style="font-size:11px;color:#94a3b8;margin-top:4px;">${item.desc || ''}</div>
+        `;
+      }
+    },
+    grid: { left: '3%', right: '4%', top: '10%', bottom: '15%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: names,
+      axisLabel: {
+        color: '#94a3b8',
+        fontSize: 10,
+        interval: 0,
+        formatter: function (val) {
+          return val.length > 7 ? val.slice(0, 7) + '..' : val;
+        }
+      },
+      axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } }
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: '#64748b', fontSize: 11, formatter: '{value}%' },
+      splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+    },
+    series: [
+      {
+        name: 'Placeholder',
+        type: 'bar',
+        stack: 'Total',
+        itemStyle: { borderColor: 'transparent', color: 'transparent' },
+        emphasis: { itemStyle: { borderColor: 'transparent', color: 'transparent' } },
+        data: placeholder
+      },
+      {
+        name: 'Contribution',
+        type: 'bar',
+        stack: 'Total',
+        data: barData,
+        label: {
+          show: true,
+          position: 'top',
+          color: '#f8fafc',
+          fontSize: 10,
+          formatter: function (p) {
+            const val = waterfallData[p.dataIndex].value;
+            return `${val > 0 ? '+' : ''}${val}%`;
+          }
+        }
+      }
+    ]
+  };
+
+  mlState.waterfallChart.setOption(option, true);
+}
+
+function renderRadarChart(styleData) {
+  const chartEl = document.getElementById('ml-radar-chart');
+  if (!chartEl) return;
+  if (!mlState.radarChart) {
+    mlState.radarChart = echarts.init(chartEl);
+    window.addEventListener('resize', () => {
+      mlState.radarChart && mlState.radarChart.resize();
+    });
+  }
+
+  if (!styleData || !styleData.indicators) {
+    mlState.radarChart.clear();
+    return;
+  }
+
+  const indicators = styleData.indicators;
+  const stratScores = styleData.strategy_scores || [];
+  const bmkScores = styleData.benchmark_scores || [];
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      backgroundColor: 'rgba(17, 22, 34, 0.95)',
+      borderColor: 'rgba(255, 255, 255, 0.1)',
+      textStyle: { color: '#f8fafc', fontSize: 12 }
+    },
+    legend: {
+      data: ['策略组合风格得分', '沪深300基准风格'],
+      textStyle: { color: '#94a3b8', fontSize: 11 },
+      top: 5
+    },
+    radar: {
+      indicator: indicators,
+      radius: '62%',
+      splitNumber: 4,
+      axisName: {
+        color: '#94a3b8',
+        fontSize: 10
+      },
+      splitLine: {
+        lineStyle: {
+          color: 'rgba(255, 255, 255, 0.08)'
+        }
+      },
+      splitArea: {
+        show: true,
+        areaStyle: {
+          color: ['rgba(255, 255, 255, 0.02)', 'rgba(255, 255, 255, 0.05)']
+        }
+      },
+      axisLine: {
+        lineStyle: {
+          color: 'rgba(255, 255, 255, 0.1)'
+        }
+      }
+    },
+    series: [
+      {
+        name: '风格雷达',
+        type: 'radar',
+        data: [
+          {
+            value: stratScores,
+            name: '策略组合风格得分',
+            itemStyle: { color: '#06b6d4' },
+            lineStyle: { width: 2.5, color: '#06b6d4' },
+            areaStyle: { color: 'rgba(6, 182, 212, 0.3)' }
+          },
+          {
+            value: bmkScores,
+            name: '沪深300基准风格',
+            itemStyle: { color: '#64748b' },
+            lineStyle: { width: 1.5, type: 'dashed', color: '#64748b' },
+            areaStyle: { color: 'rgba(100, 116, 139, 0.1)' }
+          }
+        ]
+      }
+    ]
+  };
+
+  mlState.radarChart.setOption(option, true);
+}
+
+function renderAttributionTable(sectors) {
+  const tbody = document.getElementById('ml-attribution-table-body');
+  if (!tbody) return;
+
+  if (!sectors || sectors.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">未产生行业归因数据</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = '';
+  sectors.forEach(s => {
+    const tr = document.createElement('tr');
+    const totPct = s.total_contribution_pct != null ? s.total_contribution_pct : 0;
+    const totClass = totPct >= 0 ? 'text-emerald' : 'text-rose';
+    const totSign = totPct > 0 ? '+' : '';
+
+    const allocSign = s.allocation_effect_pct > 0 ? '+' : '';
+    const allocColor = s.allocation_effect_pct >= 0 ? '#34d399' : '#f43f5e';
+
+    const selectSign = s.selection_effect_pct > 0 ? '+' : '';
+    const selectColor = s.selection_effect_pct >= 0 ? '#34d399' : '#f43f5e';
+
+    const interSign = s.interaction_effect_pct > 0 ? '+' : '';
+    const interColor = s.interaction_effect_pct >= 0 ? '#a78bfa' : '#94a3b8';
+
+    const actW = s.active_weight != null ? s.active_weight : 0;
+    const actWSign = actW > 0 ? '+' : '';
+    const actWColor = actW > 0 ? '#38bdf8' : (actW < 0 ? '#f59e0b' : '#94a3b8');
+
+    tr.innerHTML = `
+      <td><strong>${s.sector}</strong></td>
+      <td style="font-family:var(--font-mono);">${s.avg_weight_strategy}%</td>
+      <td style="font-family:var(--font-mono);color:#94a3b8;">${s.avg_weight_benchmark}%</td>
+      <td style="font-family:var(--font-mono);color:${actWColor};font-weight:600;">${actWSign}${actW}%</td>
+      <td style="font-family:var(--font-mono);color:${allocColor};">${allocSign}${s.allocation_effect_pct}%</td>
+      <td style="font-family:var(--font-mono);color:${selectColor};">${selectSign}${s.selection_effect_pct}%</td>
+      <td style="font-family:var(--font-mono);color:${interColor};">${interSign}${s.interaction_effect_pct}%</td>
+      <td class="${totClass}"><strong style="font-family:var(--font-mono);">${totSign}${totPct}%</strong></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function runAttributionAnalysis() {
+  if (mlState.isAttributing) return;
+
+  const symbolsInput = document.getElementById('ml-symbols-input');
+  const symbols = (symbolsInput ? symbolsInput.value : '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  if (symbols.length < 2) {
+    alert('业绩归因与多因子风格分析需要至少 2 只标的资产！');
+    return;
+  }
+
+  const startDate = document.getElementById('ml-start-date').value || '2023-01-01';
+  const endDate = document.getElementById('ml-end-date').value || '2024-01-01';
+
+  const attribBtn = document.getElementById('ml-attribution-btn');
+  const statusEl = document.getElementById('ml-status-text');
+
+  mlState.isAttributing = true;
+  if (attribBtn) attribBtn.disabled = true;
+
+  if (statusEl) {
+    statusEl.innerHTML = `
+      <span class="status-dot yellow"></span>
+      <span>正在调用 Brinson-Fachler 归因引擎分解行业配置效应、选股 Alpha 与 Barra 风格暴露...</span>
+    `;
+  }
+
+  try {
+    const resp = await fetch('/api/attribution/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbols,
+        start_date: startDate,
+        end_date: endDate
+      })
+    });
+
+    const res = await resp.json();
+    if (res.code !== 200 || !res.data) {
+      throw new Error(res.detail || res.message || '业绩归因计算失败');
+    }
+
+    renderAttribution(res.data);
+
+    // 激活 Brinson 选项卡并更新主图
+    document.querySelectorAll('.ml-chart-tabs .details-tab').forEach(t => {
+      if (t.dataset.tab === 'attribution') {
+        t.classList.add('active');
+      } else {
+        t.classList.remove('active');
+      }
+    });
+    mlState.activeTab = 'attribution';
+    const descEl = document.getElementById('ml-chart-desc');
+    if (descEl) {
+      descEl.textContent = 'Brinson-Fachler 行业多期累计业绩归因演化曲线（行业配置效应 + 选股Alpha效应 + 交互协同效应）';
+    }
+    renderMLChart();
+
+    if (statusEl) {
+      statusEl.innerHTML = `
+        <span class="status-dot green"></span>
+        <span>✅ Brinson 业绩归因与风格诊断生成完成！超额收益来源与主动偏离已完整拆解</span>
+      `;
+    }
+  } catch (err) {
+    console.error('业绩归因异常:', err);
+    if (statusEl) {
+      statusEl.innerHTML = `
+        <span class="status-dot" style="background:#f43f5e;box-shadow:0 0 8px rgba(244,63,94,0.6)"></span>
+        <span>❌ 归因失败: ${err.message}</span>
+      `;
+    }
+    alert(`归因失败: ${err.message}`);
+  } finally {
+    mlState.isAttributing = false;
+    if (attribBtn) attribBtn.disabled = false;
+  }
+}
+

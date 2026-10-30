@@ -1052,6 +1052,10 @@
               <span class="btn-icon">⚖️</span>
               <span>测算马科维茨有效前沿与风险平价</span>
             </button>
+            <button type="button" id="ml-attribution-btn" class="chip-btn primary ml-attrib-btn">
+              <span class="btn-icon">🔍</span>
+              <span>生成 Brinson 业绩归因与风格诊断</span>
+            </button>
             <div id="ml-status-text" class="ml-status-text">
               <span class="status-dot green"></span>
               <span>就绪：准备开始时序滚动训练与组合权重优化</span>
@@ -1140,6 +1144,7 @@
             <button class="details-tab" data-tab="ic">📊 样本外滚动 Rank-IC 时序跟踪</button>
             <button class="details-tab" data-tab="drawdown">🌊 动态水下回撤 (Drawdown Depth)</button>
             <button class="details-tab" data-tab="frontier">⚖️ 马科维茨有效前沿 & 风险平价</button>
+            <button class="details-tab" data-tab="attribution">🔍 Brinson 归因 & 风格雷达</button>
           </div>
           <div class="ml-chart-tag" id="ml-chart-desc">AI 组合按周调仓全真净值回测（含佣金与印花税）</div>
         </div>
@@ -1182,6 +1187,63 @@
             </thead>
             <tbody id="ml-optimizer-table-body">
               <tr><td colspan="6" class="empty-cell">点击上方【测算马科维茨有效前沿与风险平价】生成数学模型优化与风险预算方案</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Brinson 业绩归因与多因子风格暴露分析卡片 -->
+      <div id="ml-attribution-section" class="card-box ml-attribution-card" style="display: none; margin-bottom: 20px;">
+        <div class="card-header-row">
+          <div>
+            <h4 style="margin: 0; font-size: 15px; font-weight: 600; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+              <span>🔍 Brinson-Fachler 行业业绩归因与 Barra 风格因子暴露剖析</span>
+              <span class="badge-tag cyan" id="ml-attrib-status-badge">归因完成</span>
+            </h4>
+            <div style="font-size: 12px; color: #64748b; margin-top: 4px;" id="ml-attrib-desc-text">
+              基于 Brinson-Fachler (BF) 模型与 Carino 多期平滑连接算法，拆解行业配置效应、选股 Alpha 效应与风格偏离度
+            </div>
+          </div>
+          <div id="ml-style-diagnosis-badge" class="badge-tag primary" style="font-size: 12px; padding: 4px 10px;">
+            风格定位: 测算中...
+          </div>
+        </div>
+
+        <!-- 风格定性诊断条 -->
+        <div id="ml-style-diagnosis-box" class="style-diagnosis-banner" style="margin-top: 12px; padding: 10px 14px; background: rgba(6, 182, 212, 0.08); border-left: 3px solid #06b6d4; border-radius: 4px; font-size: 12px; color: #cbd5e1; line-height: 1.6;">
+          暂无诊断结果，点击【训练 AI 模型并运行全真组合回测】自动生成归因诊断报告
+        </div>
+
+        <!-- 双图网格: 左侧瀑布图 + 右侧风格雷达图 -->
+        <div class="attribution-charts-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+          <div class="sub-chart-box" style="background: rgba(10, 13, 20, 0.5); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 6px; padding: 12px;">
+            <div style="font-size: 13px; font-weight: 600; color: #f8fafc; margin-bottom: 8px;">📊 超额收益流向瀑布图 (Waterfall Breakdown)</div>
+            <div id="ml-waterfall-chart" style="width: 100%; height: 320px;"></div>
+          </div>
+          <div class="sub-chart-box" style="background: rgba(10, 13, 20, 0.5); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 6px; padding: 12px;">
+            <div style="font-size: 13px; font-weight: 600; color: #f8fafc; margin-bottom: 8px;">🎯 Barra 6 维多因子风格暴露雷达 (Active Style Tilt)</div>
+            <div id="ml-radar-chart" style="width: 100%; height: 320px;"></div>
+          </div>
+        </div>
+
+        <!-- 行业/板块 Brinson 归因明细表 -->
+        <div class="table-wrapper ml-table-wrapper" style="margin-top: 16px;">
+          <div style="font-size: 13px; font-weight: 600; color: #f8fafc; margin-bottom: 8px;">📋 板块级 Brinson 归因明细表 (含配置超额、选股Alpha与协同效应)</div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th style="width: 130px;">资产板块/行业</th>
+                <th style="width: 110px;">策略平均仓位</th>
+                <th style="width: 110px;">基准中枢仓位</th>
+                <th style="width: 100px;">主动偏离 (Active)</th>
+                <th>行业配置贡献 (Allocation %)</th>
+                <th>个股选择贡献 (Selection %)</th>
+                <th>交互协同贡献 (Interaction %)</th>
+                <th style="width: 110px;">总超额贡献 (Total %)</th>
+              </tr>
+            </thead>
+            <tbody id="ml-attribution-table-body">
+              <tr><td colspan="8" class="empty-cell">运行回测后自动呈现各行业配置与选股贡献拆解</td></tr>
             </tbody>
           </table>
         </div>

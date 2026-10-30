@@ -22,6 +22,7 @@ from ..ml.features import FeatureEngineer, FEATURE_DEFINITIONS
 from ..ml.model import AlphaPredictor
 from ..ml.strategy import AIMachineLearningStrategy
 from ..ml.optimizer import PortfolioOptimizer
+from ..core.attribution import PerformanceAttributor
 
 logger = logging.getLogger(__name__)
 
@@ -275,6 +276,16 @@ class OptimizerAnalyzeRequest(BaseModel):
     end_date: str = Field(default="2024-01-01", description="历史回测/分析结束日期")
     risk_free_rate: float = Field(default=0.025, description="无风险利率(年化)")
     max_weight: float = Field(default=0.6, description="单资产权重上限 (0.1 ~ 1.0)")
+
+
+class AttributionAnalyzeRequest(BaseModel):
+    symbols: List[str] = Field(default_factory=lambda: ["510300", "510500", "518880", "511010"], description="标的代码列表")
+    start_date: str = Field(default="2023-01-01", description="开始日期")
+    end_date: str = Field(default="2024-01-01", description="结束日期")
+    allocation_history: Optional[List[Dict[str, Any]]] = Field(default=None, description="持仓历史权重")
+    equity_curve: Optional[List[Dict[str, Any]]] = Field(default=None, description="策略净值序列")
+    benchmark_curve: Optional[List[Dict[str, Any]]] = Field(default=None, description="基准净值序列")
+    trades: Optional[List[Dict[str, Any]]] = Field(default=None, description="调仓明细")
 
 
 
@@ -848,6 +859,22 @@ def run_ml_backtest(req: MLBacktestRequest):
         results["feature_importances"] = summary.get("feature_importances", [])
         results["ic_series"] = summary.get("ic_series", [])
 
+        # 运行 Brinson 业绩归因与多因子风格暴露分析
+        try:
+            attributor = PerformanceAttributor()
+            attrib_result = attributor.analyze(
+                allocation_history=results.get("allocation_history", []),
+                data_dict=aligned_dict,
+                trading_dates=trading_dates,
+                benchmark_curve=results.get("benchmark_curve", []),
+                equity_curve=results.get("equity_curve", []),
+                trades=results.get("trades", [])
+            )
+            results["attribution"] = attrib_result
+        except Exception as attr_err:
+            logger.warning(f"业绩归因计算跳过: {attr_err}")
+            results["attribution"] = None
+
         return {
             "code": 200,
             "message": "AI 策略回测运行成功",
@@ -909,6 +936,78 @@ def run_optimizer_analysis(req: OptimizerAnalyzeRequest):
     except Exception as e:
         logger.exception("投资组合优化异常")
         raise HTTPException(status_code=500, detail=f"投资组合优化异常: {str(e)}")
+
+
+@router.post("/attribution/analyze")
+def run_attribution_analysis(req: AttributionAnalyzeRequest):
+    """
+    运行 Brinson-Fachler 行业业绩归因、超额流向瀑布图与 Barra 多因子风格暴露分析
+    """
+    bmk_df = data_provider.fetch_daily_bars(symbol="000300", start_date=req.start_date, end_date=req.end_date, adjust="qfq")
+    data_dict = data_provider.fetch_multi_daily_bars(symbols=req.symbols, start_date=req.start_date, end_date=req.end_date, adjust="qfq")
+    if not data_dict:
+        raise HTTPException(status_code=400, detail="获取标的池行情失败")
+
+    trading_dates, aligned_dict = data_provider.align_multi_bars(data_dict, bmk_df)
+    if len(trading_dates) < 20:
+        raise HTTPException(status_code=400, detail="有效交易日数据不足以开展业绩归因分析")
+
+    # 如果未传入持仓历史与净值曲线，则根据标的池构建等权重模拟方案作为基准进行归因
+    alloc_hist = req.allocation_history
+    eq_curve = req.equity_curve
+    bmk_curve = req.benchmark_curve
+
+    if not alloc_hist or not eq_curve or not bmk_curve:
+        eq_curve = []
+        bmk_curve = []
+        alloc_hist = []
+        n_assets = len(req.symbols)
+        eq_val = 1.0
+        bmk_val = 1.0
+
+        for d_idx, d in enumerate(trading_dates):
+            if d_idx == 0:
+                eq_curve.append({"date": d, "value": 1.0})
+                bmk_curve.append({"date": d, "value": 1.0})
+                alloc_hist.append({"date": d, "weights": {s: 1.0 / n_assets for s in req.symbols}})
+                continue
+
+            day_ret = 0.0
+            for s, df in aligned_dict.items():
+                p_now = float(df.iloc[d_idx]["close"])
+                p_prev = float(df.iloc[d_idx - 1]["close"])
+                day_ret += (1.0 / n_assets) * ((p_now - p_prev) / p_prev)
+
+            bmk_now = float(bmk_df.iloc[d_idx]["close"]) if d_idx < len(bmk_df) else 1.0
+            bmk_prev = float(bmk_df.iloc[d_idx - 1]["close"]) if (d_idx - 1) < len(bmk_df) else 1.0
+            b_ret = (bmk_now - bmk_prev) / bmk_prev if bmk_prev > 0 else 0.0
+
+            eq_val *= (1.0 + day_ret)
+            bmk_val *= (1.0 + b_ret)
+
+            eq_curve.append({"date": d, "value": round(eq_val, 4)})
+            bmk_curve.append({"date": d, "value": round(bmk_val, 4)})
+            alloc_hist.append({"date": d, "weights": {s: 1.0 / n_assets for s in req.symbols}})
+
+    try:
+        attributor = PerformanceAttributor()
+        res = attributor.analyze(
+            allocation_history=alloc_hist,
+            data_dict=aligned_dict,
+            trading_dates=trading_dates,
+            benchmark_curve=bmk_curve,
+            equity_curve=eq_curve,
+            trades=req.trades
+        )
+        return {
+            "code": 200,
+            "message": "业绩归因与风格暴露分析完成",
+            "data": res
+        }
+    except Exception as e:
+        logger.exception("业绩归因分析异常")
+        raise HTTPException(status_code=500, detail=f"业绩归因分析异常: {str(e)}")
+
 
 
 
