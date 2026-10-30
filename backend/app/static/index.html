@@ -1064,6 +1064,10 @@
               <span class="btn-icon">⚡</span>
               <span>实盘事前风控网关</span>
             </button>
+            <button type="button" id="ml-microstructure-btn" class="chip-btn primary ml-micro-btn">
+              <span class="btn-icon">🌊</span>
+              <span>高频订单流与微观 Alpha</span>
+            </button>
             <div id="ml-status-text" class="ml-status-text">
 
 
@@ -1156,6 +1160,7 @@
             <button class="details-tab" data-tab="frontier">⚖️ 马科维茨有效前沿 & 风险平价</button>
             <button class="details-tab" data-tab="attribution">🔍 Brinson 归因 & 风格雷达</button>
             <button class="details-tab" data-tab="stress">🛡️ 压力测试 & 黑天鹅情景</button>
+            <button class="details-tab" data-tab="micro">🌊 高频订单流 & 盘口微观结构 (L2 Alpha)</button>
           </div>
 
           <div class="ml-chart-tag" id="ml-chart-desc">AI 组合按周调仓全真净值回测（含佣金与印花税）</div>
@@ -1572,6 +1577,122 @@
             </thead>
             <tbody id="ml-risk-logs-table-body">
               <tr><td colspan="9" class="empty-cell">暂无风控拦截流水记录</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 高频订单流与日内微观结构 Alpha 因子看板卡片 -->
+      <div id="ml-microstructure-section" class="card-box ml-microstructure-card" style="display: none; margin-bottom: 20px;">
+        <div class="card-header-row">
+          <div>
+            <h4 style="margin: 0; font-size: 15px; font-weight: 600; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+              <span>🌊 高频订单流动力学与日内盘口微观结构 Alpha (Level-2 Order Flow)</span>
+              <span class="badge-tag cyan" id="ml-micro-status-badge">诊断完成</span>
+            </h4>
+            <div style="font-size: 12px; color: #64748b; margin-top: 4px;">
+              基于 Cont et al. (2014) OFI 订单流不平衡度、Easley et al. (2012) VPIN 毒性概率、Stoikov (2018) 微观价格偏离与五档盘口深度 (BDI-5)
+            </div>
+          </div>
+          <div style="display: flex; gap: 10px; align-items: center;">
+            <div id="ml-micro-sentiment-badge" class="badge-tag green" style="font-size: 12px; padding: 4px 10px;">
+              微观多空: 多头主导
+            </div>
+            <div id="ml-micro-toxicity-badge" class="badge-tag emerald" style="font-size: 12px; padding: 4px 10px;">
+              知情毒性: 正常安全
+            </div>
+          </div>
+        </div>
+
+        <!-- 6 项微观 KPI 网格 -->
+        <div class="metrics-grid" style="grid-template-columns: repeat(6, 1fr); margin-top: 14px; margin-bottom: 14px;">
+          <div class="metric-card" style="padding: 10px 12px;">
+            <div class="metric-label" style="font-size: 11px;">最新中间价 / 微观价</div>
+            <div class="metric-value-row">
+              <span id="ml-micro-kpi-price" class="metric-value" style="font-size: 18px; color: #38bdf8;">--</span>
+            </div>
+            <div class="metric-footer" style="font-size: 10px; color: #64748b;" id="ml-micro-kpi-bias">价偏: -- bp</div>
+          </div>
+          <div class="metric-card" style="padding: 10px 12px;">
+            <div class="metric-label" style="font-size: 11px;">订单流不平衡度 (OFI)</div>
+            <div class="metric-value-row">
+              <span id="ml-micro-kpi-ofi" class="metric-value" style="font-size: 18px; color: #10b981;">--</span>
+            </div>
+            <div class="metric-footer" style="font-size: 10px; color: #64748b;">Cont et al. (2014)</div>
+          </div>
+          <div class="metric-card" style="padding: 10px 12px;">
+            <div class="metric-label" style="font-size: 11px;">知情交易毒性 (VPIN)</div>
+            <div class="metric-value-row">
+              <span id="ml-micro-kpi-vpin" class="metric-value" style="font-size: 18px; color: #f59e0b;">--</span>
+            </div>
+            <div class="metric-footer" style="font-size: 10px; color: #64748b;">Easley et al. (2012)</div>
+          </div>
+          <div class="metric-card" style="padding: 10px 12px;">
+            <div class="metric-label" style="font-size: 11px;">五档深度不平衡 (BDI-5)</div>
+            <div class="metric-value-row">
+              <span id="ml-micro-kpi-bdi" class="metric-value" style="font-size: 18px; color: #a855f7;">--</span>
+            </div>
+            <div class="metric-footer" style="font-size: 10px; color: #64748b;">买卖五档厚度差比</div>
+          </div>
+          <div class="metric-card" style="padding: 10px 12px;">
+            <div class="metric-label" style="font-size: 11px;">主力主动买入占比</div>
+            <div class="metric-value-row">
+              <span id="ml-micro-kpi-abr" class="metric-value" style="font-size: 18px; color: #06b6d4;">--</span>
+            </div>
+            <div class="metric-footer" style="font-size: 10px; color: #64748b;">Tick Rule 主买比例</div>
+          </div>
+          <div class="metric-card" style="padding: 10px 12px;">
+            <div class="metric-label" style="font-size: 11px;">微观多空综合评分</div>
+            <div class="metric-value-row">
+              <span id="ml-micro-kpi-score" class="metric-value" style="font-size: 18px; color: #f43f5e;">--</span>
+            </div>
+            <div class="metric-footer" style="font-size: 10px; color: #64748b;">范围 [-100, +100]</div>
+          </div>
+        </div>
+
+        <!-- 毒性警报横幅 -->
+        <div id="ml-micro-vpin-banner" style="margin-bottom: 16px; padding: 10px 14px; background: rgba(16, 185, 129, 0.08); border-left: 3px solid #10b981; border-radius: 4px; font-size: 12px; color: #cbd5e1; line-height: 1.6;">
+          微观结构状态加载中...
+        </div>
+
+        <!-- 联动图表栅格 (左侧: OFI 与价格时序柱折图; 右侧: VPIN 毒性雷达与盘口偏离图) -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+          <div style="background: rgba(15, 23, 42, 0.4); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 12px;">
+            <div style="font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 6px; display: flex; justify-content: space-between;">
+              <span>📊 订单流不平衡度 (OFI) 与成交价格动态冲击</span>
+              <span style="font-size: 11px; color: #94a3b8;">绿柱=买推 / 红柱=卖压</span>
+            </div>
+            <div id="ml-micro-ofi-chart" style="width: 100%; height: 260px;"></div>
+          </div>
+          <div style="background: rgba(15, 23, 42, 0.4); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 12px;">
+            <div style="font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 6px; display: flex; justify-content: space-between;">
+              <span>⚠️ 知情交易毒性概率 (VPIN) 滑动时序跟踪</span>
+              <span style="font-size: 11px; color: #f43f5e;">红虚线=0.45 闪崩红线</span>
+            </div>
+            <div id="ml-micro-vpin-chart" style="width: 100%; height: 260px;"></div>
+          </div>
+        </div>
+
+        <!-- 因子预测力评价与 Rank-IC 表格 -->
+        <div class="table-wrapper" style="border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; overflow: hidden;">
+          <div style="padding: 10px 14px; background: rgba(15, 23, 42, 0.7); font-size: 13px; font-weight: 600; color: #e2e8f0; display: flex; justify-content: space-between;">
+            <span>🔬 6 大高频订单流与微观结构 Alpha 因子预测力 (Rank-IC) 与实时多空信号</span>
+            <span style="font-size: 11px; color: #38bdf8;">预测周期: 5-Tick 收益率</span>
+          </div>
+          <table class="data-table" style="margin: 0;">
+            <thead>
+              <tr>
+                <th style="width: 180px;">因子名称</th>
+                <th style="width: 130px;">因子类别</th>
+                <th style="width: 100px;">当前最新值</th>
+                <th style="width: 100px;">日内均值</th>
+                <th style="width: 100px;">Rank-IC</th>
+                <th style="width: 180px;">高频信号判定</th>
+                <th>因子数学机理与学术释义</th>
+              </tr>
+            </thead>
+            <tbody id="ml-micro-factors-table-body">
+              <tr><td colspan="7" class="empty-cell">点击上方【高频订单流与微观 Alpha】提取特征工程数据</td></tr>
             </tbody>
           </table>
         </div>

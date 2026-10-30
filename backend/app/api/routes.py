@@ -25,6 +25,7 @@ from ..ml.optimizer import PortfolioOptimizer
 from ..core.attribution import PerformanceAttributor
 from ..core.stress_testing import StressTestEngine
 from ..core.risk_gateway import PreTradeRiskGateway, RiskGatewayConfig
+from ..factors.microstructure import OrderFlowAnalyzer, MICROSTRUCTURE_FACTOR_DEFINITIONS
 
 logger = logging.getLogger(__name__)
 
@@ -1212,6 +1213,55 @@ def reset_risk_gateway_status(trading_date: Optional[str] = None, initial_equity
         "message": "风控网关日内状态与熔断锁仓已成功复位",
         "data": risk_gateway.get_status_summary()
     }
+
+
+# ============================================================================
+# 高频订单流与日内微观结构 Alpha (L2 Order Flow Microstructure)
+# ============================================================================
+
+class MicrostructureAnalyzeRequest(BaseModel):
+    symbol: str = Field("000001.SZ", description="标的代码")
+    base_price: float = Field(100.0, description="基础价格")
+    n_ticks: int = Field(150, description="分笔 Tick 序列长度", ge=30, le=500)
+    vpin_bucket_size: int = Field(50, description="VPIN 等成交量桶容量", ge=10)
+    vpin_n_buckets: int = Field(20, description="VPIN 历史滑动窗口桶数", ge=5)
+
+
+@router.get("/microstructure/factors")
+def get_microstructure_factors():
+    """获取所有支持的高频订单流与盘口微观结构 Alpha 因子元数据定义"""
+    return {
+        "code": 200,
+        "message": "获取高频微观结构因子定义成功",
+        "data": MICROSTRUCTURE_FACTOR_DEFINITIONS
+    }
+
+
+@router.post("/microstructure/analyze")
+def analyze_microstructure(req: MicrostructureAnalyzeRequest):
+    """
+    执行高频订单流与日内盘口微观结构 Alpha 因子提取与预测力建模
+    涵盖 OFI、VPIN、Stoikov 微观价格、五档盘口深度不平衡度 (BDI-5) 与 Roll 价差。
+    """
+    try:
+        analyzer = OrderFlowAnalyzer(
+            vpin_bucket_size=req.vpin_bucket_size,
+            vpin_n_buckets=req.vpin_n_buckets
+        )
+        result = analyzer.analyze(
+            symbol=req.symbol,
+            base_price=req.base_price,
+            n_ticks=req.n_ticks
+        )
+        return {
+            "code": 200,
+            "message": "高频微观结构特征工程与 Alpha 计算完成",
+            "data": result
+        }
+    except Exception as e:
+        logger.exception(f"Microstructure analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 

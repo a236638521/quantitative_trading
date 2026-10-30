@@ -2411,11 +2411,15 @@ const mlState = {
   stressResult: null,
   stressScenarioChart: null,
   stressDistChart: null,
+  microResult: null,
+  microOfiChart: null,
+  microVpinChart: null,
   selectedOptModel: 'risk_parity',
   isRunning: false,
   isOptimizing: false,
   isAttributing: false,
-  isStressTesting: false
+  isStressTesting: false,
+  isMicroAnalyzing: false
 };
 
 
@@ -2507,6 +2511,7 @@ function initML() {
         else if (mlState.activeTab === 'frontier') descEl.textContent = '马科维茨均值-方差有效前沿曲线、250点蒙特卡洛模拟散点云与四大经典配置模型定位';
         else if (mlState.activeTab === 'attribution') descEl.textContent = 'Brinson-Fachler 行业多期累计业绩归因演化曲线（行业配置效应 + 选股Alpha效应 + 交互协同效应）';
         else if (mlState.activeTab === 'stress') descEl.textContent = 'A 股极端黑天鹅危机重放承压对比（五大历史事件深度 + 日收益率极端在险价值切片）';
+        else if (mlState.activeTab === 'micro') descEl.textContent = '高频分笔订单流不平衡度 (OFI)、知情交易毒性 (VPIN) 与微观均衡价格动力学';
       }
 
       renderMLChart();
@@ -2541,6 +2546,12 @@ function initML() {
   const riskBtn = document.getElementById('ml-risk-gateway-btn');
   if (riskBtn) {
     riskBtn.addEventListener('click', toggleRiskGatewaySection);
+  }
+
+  // 触发高频订单流与微观 Alpha 测算按键
+  const microBtn = document.getElementById('ml-microstructure-btn');
+  if (microBtn) {
+    microBtn.addEventListener('click', runMicrostructureAnalysis);
   }
 
   // 绑定事前风控网关各交互按键
@@ -3589,6 +3600,104 @@ function renderMLChart() {
           itemStyle: { color: '#10b981' },
           lineStyle: { width: 2.5, color: '#10b981' },
           symbolSize: 8
+        }
+      ]
+    };
+    mlState.chart.setOption(option, true);
+  } else if (mlState.activeTab === 'micro') {
+    if (!mlState.microResult || !mlState.microResult.time_series) {
+      mlState.chart.clear();
+      runMicrostructureAnalysis();
+      return;
+    }
+    const ts = mlState.microResult.time_series || [];
+    const times = ts.map(d => d.time);
+    const prices = ts.map(d => d.price);
+    const microPrices = ts.map(d => d.micro_price);
+    const ofiList = ts.map(d => d.ofi);
+
+    const option = {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(17, 22, 34, 0.95)',
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        textStyle: { color: '#f8fafc', fontSize: 12 },
+        formatter: function (params) {
+          let tip = `<div style="font-weight:600;margin-bottom:6px;">时间戳: ${params[0].axisValue}</div>`;
+          params.forEach(p => {
+            const colorDot = `<span style="display:inline-block;margin-right:6px;border-radius:10px;width:9px;height:9px;background-color:${p.color};"></span>`;
+            const unit = p.seriesName.includes('OFI') ? '手' : '¥';
+            tip += `<div>${colorDot} ${p.seriesName}: <b>${unit}${p.value}</b></div>`;
+          });
+          return tip;
+        }
+      },
+      legend: {
+        data: ['成交价 (Last Price)', 'Stoikov 微观价格 (Micro-Price)', '订单流不平衡度 (OFI)'],
+        textStyle: { color: '#94a3b8', fontSize: 12 },
+        top: 10
+      },
+      grid: { left: '3%', right: '3%', top: '15%', bottom: '14%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: times,
+        axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+        axisLabel: { color: '#64748b', fontSize: 11 }
+      },
+      yAxis: [
+        {
+          type: 'value',
+          scale: true,
+          name: '价格 (¥)',
+          nameTextStyle: { color: '#64748b', fontSize: 11 },
+          axisLabel: { color: '#64748b', fontSize: 11, formatter: '¥{value}' },
+          splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+        },
+        {
+          type: 'value',
+          name: 'OFI (手)',
+          nameTextStyle: { color: '#64748b', fontSize: 11 },
+          axisLabel: { color: '#64748b', fontSize: 11 },
+          splitLine: { show: false }
+        }
+      ],
+      dataZoom: [
+        { type: 'slider', show: true, bottom: 5, height: 18, fillerColor: 'rgba(6, 182, 212, 0.15)' },
+        { type: 'inside' }
+      ],
+      series: [
+        {
+          name: '成交价 (Last Price)',
+          type: 'line',
+          data: prices,
+          itemStyle: { color: '#38bdf8' },
+          lineStyle: { width: 2, color: '#38bdf8' },
+          showSymbol: false,
+          z: 3
+        },
+        {
+          name: 'Stoikov 微观价格 (Micro-Price)',
+          type: 'line',
+          data: microPrices,
+          itemStyle: { color: '#a855f7' },
+          lineStyle: { width: 1.8, type: 'dashed', color: '#a855f7' },
+          showSymbol: false,
+          z: 3
+        },
+        {
+          name: '订单流不平衡度 (OFI)',
+          type: 'bar',
+          yAxisIndex: 1,
+          data: ofiList.map(val => ({
+            value: val,
+            itemStyle: {
+              color: val >= 0 ? 'rgba(16, 185, 129, 0.65)' : 'rgba(244, 63, 94, 0.65)',
+              borderRadius: val >= 0 ? [3, 3, 0, 0] : [0, 0, 3, 3]
+            }
+          })),
+          barWidth: 6,
+          z: 2
         }
       ]
     };
@@ -4990,6 +5099,369 @@ async function toggleRiskGatewayActive() {
     console.error('切换风控开关失败:', err);
   }
 }
+
+
+// ==========================================================================
+// 高频订单流与日内盘口微观结构 Alpha (Level-2 Order Flow Microstructure)
+// ==========================================================================
+
+async function runMicrostructureAnalysis() {
+  if (mlState.isMicroAnalyzing) return;
+
+  const symbolsInput = document.getElementById('ml-symbols-input');
+  const symbols = (symbolsInput ? symbolsInput.value : '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  const targetSymbol = symbols.length > 0 ? symbols[0] : 'sh.600519';
+
+  const microBtn = document.getElementById('ml-microstructure-btn');
+  const statusEl = document.getElementById('ml-status-text');
+
+  mlState.isMicroAnalyzing = true;
+  if (microBtn) microBtn.disabled = true;
+
+  if (statusEl) {
+    statusEl.innerHTML = `
+      <span class="status-dot yellow"></span>
+      <span>正在提取【${targetSymbol}】高频 Level-2 订单流、OFI 挂单动力学与 VPIN 知情毒性分桶...</span>
+    `;
+  }
+
+  try {
+    const resp = await fetch('/api/microstructure/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol: targetSymbol,
+        base_price: 1800.0,
+        n_ticks: 120,
+        vpin_bucket_size: 40,
+        vpin_n_buckets: 15
+      })
+    });
+
+    const res = await resp.json();
+    if (res.code !== 200 || !res.data) {
+      throw new Error(res.detail || res.message || '微观结构分析接口异常');
+    }
+
+    mlState.microResult = res.data;
+
+    // 显示微观结构看板卡片
+    const microSection = document.getElementById('ml-microstructure-section');
+    if (microSection) {
+      microSection.style.display = 'block';
+      microSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // 渲染微观看板各项内容
+    renderMicrostructure(res.data);
+
+    // 若当前主选项卡是 micro，刷新主图
+    if (mlState.activeTab === 'micro') {
+      renderMLChart();
+    }
+
+    if (statusEl) {
+      statusEl.innerHTML = `
+        <span class="status-dot green"></span>
+        <span>【${targetSymbol}】高频微观结构 Alpha 提取完成 (6 大微观因子、OFI 时序与 VPIN 毒性诊断就绪)</span>
+      `;
+    }
+  } catch (err) {
+    console.error('微观结构分析失败:', err);
+    if (statusEl) {
+      statusEl.innerHTML = `
+        <span class="status-dot red"></span>
+        <span>微观结构分析失败: ${err.message}</span>
+      `;
+    }
+    alert(`微观结构分析失败: ${err.message}`);
+  } finally {
+    mlState.isMicroAnalyzing = false;
+    if (microBtn) microBtn.disabled = false;
+  }
+}
+
+function renderMicrostructure(data) {
+  if (!data || !data.summary) return;
+  const s = data.summary;
+
+  // 1. KPI 指标填充
+  const priceEl = document.getElementById('ml-micro-kpi-price');
+  if (priceEl) priceEl.textContent = `¥${s.latest_price} / ¥${s.latest_micro_price}`;
+
+  const biasEl = document.getElementById('ml-micro-kpi-bias');
+  if (biasEl) {
+    const sign = s.micro_bias_bp > 0 ? '+' : '';
+    biasEl.textContent = `价偏: ${sign}${s.micro_bias_bp} bp`;
+    biasEl.style.color = s.micro_bias_bp >= 0 ? '#10b981' : '#f43f5e';
+  }
+
+  const ofiEl = document.getElementById('ml-micro-kpi-ofi');
+  if (ofiEl) {
+    const ofiVal = s.latest_ofi ?? s.ofi_current;
+    ofiEl.textContent = `${ofiVal > 0 ? '+' : ''}${ofiVal}`;
+    ofiEl.style.color = ofiVal >= 0 ? '#10b981' : '#f43f5e';
+  }
+
+  const vpinEl = document.getElementById('ml-micro-kpi-vpin');
+  if (vpinEl) {
+    const vpinVal = s.latest_vpin ?? s.vpin_current;
+    vpinEl.textContent = `${(vpinVal * 100).toFixed(1)}%`;
+    vpinEl.style.color = s.vpin_color || '#f59e0b';
+  }
+
+  const bdiEl = document.getElementById('ml-micro-kpi-bdi');
+  if (bdiEl) {
+    const bdiVal = s.latest_depth_imbalance ?? s.depth_imbalance;
+    bdiEl.textContent = `${(bdiVal * 100).toFixed(1)}%`;
+    bdiEl.style.color = bdiVal >= 0 ? '#38bdf8' : '#f43f5e';
+  }
+
+  const abrEl = document.getElementById('ml-micro-kpi-abr');
+  if (abrEl) {
+    const abrVal = s.latest_active_buy_ratio ?? s.active_buy_pct;
+    abrEl.textContent = `${abrVal}%`;
+    abrEl.style.color = abrVal >= 50 ? '#10b981' : '#f43f5e';
+  }
+
+  const scoreEl = document.getElementById('ml-micro-kpi-score');
+  if (scoreEl) {
+    const scVal = s.sentiment_score || 0;
+    scoreEl.textContent = `${scVal > 0 ? '+' : ''}${scVal}`;
+    scoreEl.style.color = scVal >= 20 ? '#10b981' : (scVal <= -20 ? '#f43f5e' : '#fbbf24');
+  }
+
+  // 2. 徽章与诊断横幅
+  const sentBadge = document.getElementById('ml-micro-sentiment-badge');
+  if (sentBadge) {
+    sentBadge.textContent = `微观多空: ${s.sentiment_label}`;
+    sentBadge.className = `badge-tag ${s.sentiment_score >= 20 ? 'green' : (s.sentiment_score <= -20 ? 'red' : 'yellow')}`;
+  }
+
+  const toxBadge = document.getElementById('ml-micro-toxicity-badge');
+  if (toxBadge) {
+    toxBadge.textContent = `知情毒性: ${s.vpin_level}`;
+    toxBadge.style.borderColor = s.vpin_color;
+    toxBadge.style.color = s.vpin_color;
+  }
+
+  const bannerEl = document.getElementById('ml-micro-vpin-banner');
+  if (bannerEl) {
+    bannerEl.style.borderLeftColor = s.vpin_color || '#10b981';
+    bannerEl.style.background = `${s.vpin_color || '#10b981'}15`;
+    bannerEl.innerHTML = `
+      <div style="font-weight:600;color:${s.vpin_color || '#10b981'};margin-bottom:3px;">
+        ⚠️ 盘口微观动力学审计: ${s.vpin_level} (微观多空综合评分: ${s.sentiment_score})
+      </div>
+      <div>${s.vpin_desc}</div>
+    `;
+  }
+
+  // 3. 渲染左右联动图表
+  renderMicroOfiChart(data.time_series || []);
+  renderMicroVpinChart(data.time_series || []);
+
+  // 4. 渲染因子评价表格
+  renderMicroFactorsTable(data.factor_evaluations || []);
+}
+
+function renderMicroOfiChart(timeSeries) {
+  const chartEl = document.getElementById('ml-micro-ofi-chart');
+  if (!chartEl || typeof echarts === 'undefined') return;
+
+  if (!mlState.microOfiChart) {
+    mlState.microOfiChart = echarts.init(chartEl);
+    window.addEventListener('resize', () => {
+      mlState.microOfiChart && mlState.microOfiChart.resize();
+    });
+  }
+
+  const times = timeSeries.map(d => d.time);
+  const prices = timeSeries.map(d => d.price);
+  const ofis = timeSeries.map(d => d.ofi);
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(17, 22, 34, 0.95)',
+      borderColor: 'rgba(255, 255, 255, 0.1)',
+      textStyle: { color: '#f8fafc', fontSize: 11 },
+      formatter: function (params) {
+        let tip = `<div style="font-weight:600;margin-bottom:4px;">${params[0].axisValue}</div>`;
+        params.forEach(p => {
+          const colorDot = `<span style="display:inline-block;margin-right:6px;border-radius:10px;width:8px;height:8px;background-color:${p.color};"></span>`;
+          const unit = p.seriesName.includes('OFI') ? '手' : '¥';
+          tip += `<div>${colorDot} ${p.seriesName}: <b>${unit}${p.value}</b></div>`;
+        });
+        return tip;
+      }
+    },
+    grid: { left: '4%', right: '4%', top: '15%', bottom: '15%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: times,
+      axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+      axisLabel: { color: '#64748b', fontSize: 10, interval: Math.floor(times.length / 5) }
+    },
+    yAxis: [
+      {
+        type: 'value',
+        scale: true,
+        axisLabel: { color: '#64748b', fontSize: 10, formatter: '¥{value}' },
+        splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+      },
+      {
+        type: 'value',
+        axisLabel: { color: '#64748b', fontSize: 10 },
+        splitLine: { show: false }
+      }
+    ],
+    series: [
+      {
+        name: '成交价格',
+        type: 'line',
+        data: prices,
+        itemStyle: { color: '#38bdf8' },
+        lineStyle: { width: 1.8, color: '#38bdf8' },
+        showSymbol: false,
+        z: 3
+      },
+      {
+        name: 'OFI 不平衡度',
+        type: 'bar',
+        yAxisIndex: 1,
+        data: ofis.map(v => ({
+          value: v,
+          itemStyle: {
+            color: v >= 0 ? 'rgba(16, 185, 129, 0.7)' : 'rgba(244, 63, 94, 0.7)',
+            borderRadius: v >= 0 ? [2, 2, 0, 0] : [0, 0, 2, 2]
+          }
+        })),
+        barWidth: 4,
+        z: 2
+      }
+    ]
+  };
+
+  mlState.microOfiChart.setOption(option, true);
+}
+
+function renderMicroVpinChart(timeSeries) {
+  const chartEl = document.getElementById('ml-micro-vpin-chart');
+  if (!chartEl || typeof echarts === 'undefined') return;
+
+  if (!mlState.microVpinChart) {
+    mlState.microVpinChart = echarts.init(chartEl);
+    window.addEventListener('resize', () => {
+      mlState.microVpinChart && mlState.microVpinChart.resize();
+    });
+  }
+
+  const times = timeSeries.map(d => d.time);
+  const vpins = timeSeries.map(d => parseFloat((d.vpin * 100).toFixed(1)));
+  const bdis = timeSeries.map(d => parseFloat((d.depth_imbalance * 100).toFixed(1)));
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(17, 22, 34, 0.95)',
+      borderColor: 'rgba(255, 255, 255, 0.1)',
+      textStyle: { color: '#f8fafc', fontSize: 11 },
+      formatter: function (params) {
+        let tip = `<div style="font-weight:600;margin-bottom:4px;">${params[0].axisValue}</div>`;
+        params.forEach(p => {
+          const colorDot = `<span style="display:inline-block;margin-right:6px;border-radius:10px;width:8px;height:8px;background-color:${p.color};"></span>`;
+          tip += `<div>${colorDot} ${p.seriesName}: <b>${p.value}%</b></div>`;
+        });
+        return tip;
+      }
+    },
+    grid: { left: '4%', right: '4%', top: '15%', bottom: '15%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: times,
+      axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+      axisLabel: { color: '#64748b', fontSize: 10, interval: Math.floor(times.length / 5) }
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: '#64748b', fontSize: 10, formatter: '{value}%' },
+      splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
+    },
+    series: [
+      {
+        name: 'VPIN 知情毒性',
+        type: 'line',
+        data: vpins,
+        smooth: true,
+        itemStyle: { color: '#f59e0b' },
+        lineStyle: { width: 2, color: '#f59e0b' },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(245, 158, 11, 0.35)' },
+            { offset: 1, color: 'rgba(245, 158, 11, 0.02)' }
+          ])
+        },
+        markLine: {
+          silent: true,
+          lineStyle: { color: '#f43f5e', type: 'dashed', width: 1.5 },
+          data: [{ yAxis: 45, label: { formatter: '45% 闪崩危险线', color: '#f43f5e', fontSize: 10 } }]
+        },
+        showSymbol: false
+      },
+      {
+        name: '五档深度不平衡 (BDI)',
+        type: 'line',
+        data: bdis,
+        smooth: true,
+        itemStyle: { color: '#a855f7' },
+        lineStyle: { width: 1.5, type: 'dotted', color: '#a855f7' },
+        showSymbol: false
+      }
+    ]
+  };
+
+  mlState.microVpinChart.setOption(option, true);
+}
+
+function renderMicroFactorsTable(factors) {
+  const tbody = document.getElementById('ml-micro-factors-table-body');
+  if (!tbody) return;
+
+  if (!factors || factors.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">未计算出微观因子特征</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = '';
+  factors.forEach(f => {
+    const tr = document.createElement('tr');
+    const icColor = (f.rank_ic || 0) >= 0.05 ? '#10b981' : ((f.rank_ic || 0) <= -0.05 ? '#f43f5e' : '#94a3b8');
+    const isBull = (f.signal || '').includes('多') || (f.signal || '').includes('买') || (f.signal || '').includes('推进');
+    const isBear = (f.signal || '').includes('空') || (f.signal || '').includes('卖') || (f.signal || '').includes('施压') || (f.signal || '').includes('危险');
+    const sigBadgeClass = isBull ? 'green' : (isBear ? 'red' : 'yellow');
+
+    tr.innerHTML = `
+      <td><b>${f.name}</b> <div style="font-size:10px;color:#64748b;">${f.english_name || ''}</div></td>
+      <td><span class="meta-tag" style="background:rgba(6,182,212,0.15);color:#22d3ee;font-size:11px;">${f.category}</span></td>
+      <td style="font-family:var(--font-mono);font-weight:600;color:#f8fafc;">${f.current_value}</td>
+      <td style="font-family:var(--font-mono);color:#94a3b8;">${f.mean_value}</td>
+      <td style="font-family:var(--font-mono);font-weight:600;color:${icColor};">${f.rank_ic > 0 ? '+' : ''}${f.rank_ic}</td>
+      <td><span class="badge-tag ${sigBadgeClass}" style="font-size:11px;padding:2px 8px;">${f.signal}</span></td>
+      <td style="font-size:11px;color:#cbd5e1;line-height:1.5;">
+        <div>${f.description}</div>
+        <div style="color:#64748b;margin-top:2px;">💡 <b>机理释义:</b> ${f.interpretation}</div>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
 
 
 
